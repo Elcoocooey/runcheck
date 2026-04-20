@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>RunCheck</title>
+<style>
+:root {
+  --bg:#0a0a0a;
+  --surface:#141414;
+  --surface2:#1c1c1c;
+  --border:#252525;
+  --border2:#2e2e2e;
+  --text:#f0f0f0;
+  --muted:#555;
+  --muted2:#3a3a3a;
+  --green:#00e87a;
+  --green-dim:rgba(0,232,122,0.10);
+  --green-b:rgba(0,232,122,0.25);
+  --amber:#ffb800;
+  --amber-dim:rgba(255,184,0,0.10);
+  --amber-b:rgba(255,184,0,0.25);
+  --red:#ff4444;
+  --red-dim:rgba(255,68,68,0.10);
+  --red-b:rgba(255,68,68,0.25);
+  --blue:#4d9fff;
+  --mono: 'Courier New', Courier, monospace;
+  --display: Georgia, 'Times New Roman', serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html { background: #0a0a0a; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  min-height: 100vh;
+  max-width: 430px;
+  margin: 0 auto;
+  overflow-x: hidden;
+}
+
+/* HEADER */
+header { padding: 22px 20px 0; display: flex; justify-content: space-between; align-items: flex-start; }
+.app-title { font-family: var(--display); font-size: 26px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; font-style: italic; }
+.app-title span { color: var(--green); font-style: normal; }
+.app-sub { font-size: 11px; color: var(--muted); margin-top: 3px; font-style: normal; letter-spacing: 0.05em; }
+
+.gas-badge {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  text-align: right;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  min-width: 78px;
+}
+.gas-badge:active { border-color: var(--amber); }
+.badge-label { font-size: 9px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.badge-val { display: block; color: var(--amber); font-size: 18px; font-weight: bold; line-height: 1.3; }
+.badge-src { font-size: 9px; color: var(--muted2); margin-top: 1px; }
+
+/* GAS PANEL */
+.gas-panel {
+  margin: 12px 20px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  display: none;
+}
+.gas-panel.open { display: block; }
+
+.gas-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.gas-tab {
+  flex: 1;
+  padding: 11px 6px;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  text-align: center;
+}
+.gas-tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+
+.gas-pane { display: none; padding: 14px; }
+.gas-pane.active { display: block; }
+
+/* Fillup form */
+.fu-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.fu-block {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 10px 8px;
+  transition: border-color 0.15s;
+}
+.fu-block:focus-within { border-color: var(--amber); }
+.fu-block label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; display: block; margin-bottom: 3px; }
+.fu-block input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 19px;
+  font-weight: bold;
+  width: 100%;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.fu-block input::placeholder { color: #2a2a2a; }
+.fu-unit { font-size: 9px; color: var(--muted); margin-top: 2px; }
+
+.fu-preview {
+  background: var(--amber-dim);
+  border: 1px solid var(--amber-b);
+  border-radius: 10px;
+  padding: 11px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  min-height: 50px;
+}
+.fp-label { font-size: 11px; color: var(--muted); }
+.fp-val { font-size: 22px; font-weight: bold; color: var(--amber); }
+.fp-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+.fu-btn {
+  width: 100%;
+  background: var(--amber);
+  border: none;
+  border-radius: 10px;
+  color: #000;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: bold;
+  padding: 13px;
+  cursor: pointer;
+  transition: transform 0.1s, opacity 0.1s;
+  -webkit-appearance: none;
+  letter-spacing: 0.03em;
+}
+.fu-btn:active { transform: scale(0.98); opacity: 0.9; }
+.fu-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* Fillup history */
+.fu-hist { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.fu-hist-item {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.fu-hi-date { font-size: 11px; color: var(--muted); }
+.fu-hi-detail { font-size: 12px; color: var(--text); margin-top: 2px; }
+.fu-hi-cpm { font-size: 18px; font-weight: bold; color: var(--amber); white-space: nowrap; }
+.fu-hi-cpm span { font-size: 10px; color: var(--muted); font-weight: normal; }
+
+/* Manual slider */
+.slider-wrap label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; display: block; margin-bottom: 10px; }
+.slider-wrap input[type=range] { width: 100%; accent-color: var(--amber); height: 20px; }
+.slider-readout { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.slider-readout em { font-size: 11px; color: var(--muted); font-style: normal; }
+.slider-readout strong { color: var(--amber); font-size: 20px; }
+
+/* RUN INPUTS */
+.inputs { padding: 16px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.input-block {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 14px 12px;
+  position: relative;
+  transition: border-color 0.15s;
+}
+.input-block:focus-within { border-color: var(--green); }
+.input-block label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; display: block; margin-bottom: 2px; }
+.input-block input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 32px;
+  font-weight: bold;
+  width: 100%;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.input-block input::placeholder { color: #222; }
+.input-unit { position: absolute; top: 13px; right: 12px; font-size: 11px; color: var(--muted); }
+
+.platform-row {
+  padding: 0 20px 2px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.platform-row::-webkit-scrollbar { display: none; }
+.platform-btn {
+  flex-shrink: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 15px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.platform-btn.active { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+
+.analyze-wrap { padding: 14px 20px 10px; }
+.analyze-btn {
+  width: 100%;
+  background: var(--green);
+  border: none;
+  border-radius: 16px;
+  color: #000;
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: bold;
+  padding: 18px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: transform 0.1s, opacity 0.1s;
+  -webkit-appearance: none;
+}
+.analyze-btn:active { transform: scale(0.98); opacity: 0.9; }
+
+/* RESULT */
+.result {
+  margin: 0 20px 16px;
+  border-radius: 16px;
+  border: 2px solid var(--border);
+  overflow: hidden;
+  display: none;
+}
+.result.visible { display: block; }
+
+.verdict-banner { padding: 22px 20px 18px; text-align: center; }
+.verdict-banner.accept { background: var(--green-dim); border-bottom: 1px solid var(--green-b); }
+.verdict-banner.marginal { background: var(--amber-dim); border-bottom: 1px solid var(--amber-b); }
+.verdict-banner.decline { background: var(--red-dim); border-bottom: 1px solid var(--red-b); }
+
+.verdict-word { font-size: 52px; font-weight: bold; letter-spacing: -1px; line-height: 1; font-family: var(--display); font-style: italic; }
+.accept .verdict-word { color: var(--green); }
+.marginal .verdict-word { color: var(--amber); }
+.decline .verdict-word { color: var(--red); }
+.verdict-reason { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface); }
+.stat { padding: 14px 16px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.stat:nth-child(2n) { border-right: none; }
+.stat:nth-last-child(-n+2) { border-bottom: none; }
+.stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 3px; }
+.stat-value { font-size: 24px; font-weight: bold; }
+.stat-value.green { color: var(--green); }
+.stat-value.amber { color: var(--amber); }
+.stat-value.red { color: var(--red); }
+.stat-value.blue { color: var(--blue); }
+.stat-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* SECTIONS */
+.section { margin: 0 20px 18px; }
+.section-title {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.clear-btn { font-size: 10px; color: var(--red); background: none; border: none; font-family: var(--mono); cursor: pointer; padding: 0; }
+
+.rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.rule-chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.rule-dist { font-size: 12px; color: var(--muted); }
+.rule-right { text-align: right; }
+.rule-min { font-size: 17px; font-weight: bold; }
+.rule-ppm { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+.history-list { display: flex; flex-direction: column; gap: 6px; }
+.history-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.h-pay { font-size: 14px; font-weight: bold; color: var(--text); }
+.h-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.h-badge { font-size: 10px; padding: 3px 9px; border-radius: 100px; font-weight: bold; flex-shrink: 0; margin-left: 8px; }
+.h-accept { background: var(--green-dim); color: var(--green); }
+.h-marginal { background: var(--amber-dim); color: var(--amber); }
+.h-decline { background: var(--red-dim); color: var(--red); }
+.empty { font-size: 12px; color: var(--muted); text-align: center; padding: 16px; }
+.spacer { height: 40px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="app-title">RUN<span>CHECK</span></div>
+    <div class="app-sub">delivery run analyzer</div>
+  </div>
+  <div class="gas-badge" id="gasBadge" onclick="toggleGasPanel()">
+    <div class="badge-label">gas / mi</div>
+    <strong class="badge-val" id="gasBadgeVal">$0.224</strong>
+    <div class="badge-src" id="gasBadgeSrc">tap to update</div>
+  </div>
+</header>
+
+<div class="gas-panel" id="gasPanel">
+  <div class="gas-tabs">
+    <button class="gas-tab active" onclick="switchTab('fillup')">Log Fillup</button>
+    <button class="gas-tab" onclick="switchTab('history')">Fillup Log</button>
+    <button class="gas-tab" onclick="switchTab('manual')">Manual</button>
+  </div>
+
+  <div class="gas-pane active" id="pane-fillup">
+    <div class="fu-grid">
+      <div class="fu-block">
+        <label>Price/Gal</label>
+        <input type="number" inputmode="decimal" id="fuPPG" placeholder="3.29" step="0.01" min="0" oninput="updateFuPreview()">
+        <div class="fu-unit">$/gal</div>
+      </div>
+      <div class="fu-block">
+        <label>Gallons</label>
+        <input type="number" inputmode="decimal" id="fuGal" placeholder="16.0" step="0.1" min="0" oninput="updateFuPreview()">
+        <div class="fu-unit">gallons</div>
+      </div>
+      <div class="fu-block">
+        <label>Trip Miles</label>
+        <input type="number" inputmode="decimal" id="fuMi" placeholder="255" step="1" min="0" oninput="updateFuPreview()">
+        <div class="fu-unit">since last fillup</div>
+      </div>
+    </div>
+    <div class="fu-preview">
+      <div>
+        <div class="fp-label">Calculated gas cost / mile</div>
+        <div class="fp-sub" id="fuCalcSub">enter all 3 fields above</div>
+      </div>
+      <div style="text-align:right">
+        <div class="fp-val" id="fuCalcVal">--</div>
+      </div>
+    </div>
+    <button class="fu-btn" id="fuSaveBtn" onclick="saveFillup()" disabled>SAVE &amp; SET GAS COST</button>
+  </div>
+
+  <div class="gas-pane" id="pane-history">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;">past fillups</span>
+      <button class="clear-btn" onclick="clearFillups()">clear all</button>
+    </div>
+    <div class="fu-hist" id="fuHistList"><div class="empty">No fillups logged yet</div></div>
+  </div>
+
+  <div class="gas-pane" id="pane-manual">
+    <div class="slider-wrap">
+      <label>Override gas cost per mile manually</label>
+      <input type="range" min="0.15" max="0.45" value="0.224" step="0.001" id="gasSlider" oninput="manualGas(this.value)">
+      <div class="slider-readout">
+        <em>Jan $0.169 -- Apr $0.354</em>
+        <strong id="gasSliderVal">$0.224</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="inputs">
+  <div class="input-block">
+    <label>Pay Offered</label>
+    <div class="input-unit">$</div>
+    <input type="number" inputmode="decimal" id="inPay" placeholder="0.00" step="0.01" min="0" oninput="clearResult()">
+  </div>
+  <div class="input-block">
+    <label>Miles</label>
+    <div class="input-unit">mi</div>
+    <input type="number" inputmode="decimal" id="inMiles" placeholder="0.0" step="0.1" min="0" oninput="clearResult()">
+  </div>
+</div>
+
+<div class="platform-row">
+  <button class="platform-btn active" onclick="setPlatform(this,'Spark Shop')">Spark Shop</button>
+  <button class="platform-btn" onclick="setPlatform(this,'Curbside')">Curbside</button>
+  <button class="platform-btn" onclick="setPlatform(this,'Pharmacy')">Pharmacy</button>
+  <button class="platform-btn" onclick="setPlatform(this,'DD/UE')">DD / UE</button>
+  <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
+</div>
+
+<div class="analyze-wrap">
+  <button class="analyze-btn" onclick="analyze()">CHECK THIS RUN &gt;&gt;</button>
+</div>
+
+<div class="result" id="result">
+  <div class="verdict-banner" id="vBanner">
+    <div class="verdict-word" id="vWord">--</div>
+    <div class="verdict-reason" id="vReason"></div>
+  </div>
+  <div class="stats-grid">
+    <div class="stat">
+      <div class="stat-label">Pay / Mile</div>
+      <div class="stat-value green" id="sPPM">--</div>
+      <div class="stat-sub" id="sPPMsub">floor: $2.50/mi</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Net After Gas</div>
+      <div class="stat-value green" id="sNet">--</div>
+      <div class="stat-sub">both ways factored</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Gas Cost (2-way)</div>
+      <div class="stat-value amber" id="sGas">--</div>
+      <div class="stat-sub" id="sGasSub">out + return</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Min Fare Needed</div>
+      <div class="stat-value blue" id="sMin">--</div>
+      <div class="stat-sub" id="sMinSub">at this distance</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">minimum fare reference</div>
+  <div class="rules-grid">
+    <div class="rule-chip">
+      <div class="rule-dist">0 - 2 mi</div>
+      <div class="rule-right"><div class="rule-min">$9</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
+    </div>
+    <div class="rule-chip">
+      <div class="rule-dist">2 - 4 mi</div>
+      <div class="rule-right"><div class="rule-min">$11</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
+    </div>
+    <div class="rule-chip">
+      <div class="rule-dist">4 - 6 mi</div>
+      <div class="rule-right"><div class="rule-min">$14</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
+    </div>
+    <div class="rule-chip">
+      <div class="rule-dist">6 - 10 mi</div>
+      <div class="rule-right"><div class="rule-min">$18</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
+    </div>
+    <div class="rule-chip">
+      <div class="rule-dist">10+ mi</div>
+      <div class="rule-right"><div class="rule-min">$25</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
+    </div>
+    <div class="rule-chip">
+      <div class="rule-dist">DD / UE</div>
+      <div class="rule-right"><div class="rule-min">$10</div><div class="rule-ppm">always</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">
+    <span>recent runs</span>
+    <button class="clear-btn" onclick="clearHistory()">clear all</button>
+  </div>
+  <div class="history-list" id="histList"><div class="empty">No runs checked yet</div></div>
+</div>
+
+<div class="spacer"></div>
+
+<script>
+var gas = 0.224;
+var gasSource = 'tap to update';
+var platform = 'Spark Shop';
+var hist = [];
+var fillups = [];
+
+try { hist = JSON.parse(localStorage.getItem('rch') || '[]'); } catch(e) { hist = []; }
+try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch(e) { fillups = []; }
+
+if (fillups.length > 0) {
+  gas = fillups[0].cpm;
+  gasSource = 'fillup ' + fillups[0].date;
+}
+
+function syncGasBadge() {
+  document.getElementById('gasBadgeVal').textContent = '$' + gas.toFixed(3);
+  document.getElementById('gasBadgeSrc').textContent = gasSource;
+  document.getElementById('gasSlider').value = gas;
+  document.getElementById('gasSliderVal').textContent = '$' + gas.toFixed(3);
+}
+
+function toggleGasPanel() {
+  var p = document.getElementById('gasPanel');
+  if (p.classList.contains('open')) {
+    p.classList.remove('open');
+  } else {
+    p.classList.add('open');
+    renderFuHistory();
+  }
+}
+
+function switchTab(name) {
+  var tabs = document.querySelectorAll('.gas-tab');
+  var names = ['fillup', 'history', 'manual'];
+  tabs.forEach(function(t, i) {
+    if (names[i] === name) { t.classList.add('active'); } else { t.classList.remove('active'); }
+  });
+  document.querySelectorAll('.gas-pane').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('pane-' + name).classList.add('active');
+  if (name === 'history') renderFuHistory();
+}
+
+function updateFuPreview() {
+  var ppg = parseFloat(document.getElementById('fuPPG').value);
+  var gal = parseFloat(document.getElementById('fuGal').value);
+  var mi  = parseFloat(document.getElementById('fuMi').value);
+  var btn = document.getElementById('fuSaveBtn');
+  var valEl = document.getElementById('fuCalcVal');
+  var subEl = document.getElementById('fuCalcSub');
+
+  if (ppg > 0 && gal > 0 && mi > 0) {
+    var totalCost = ppg * gal;
+    var cpm = totalCost / mi;
+    var mpg = mi / gal;
+    valEl.textContent = '$' + cpm.toFixed(4) + '/mi';
+    subEl.textContent = '$' + totalCost.toFixed(2) + ' total  |  ' + mpg.toFixed(1) + ' mpg';
+    btn.disabled = false;
+  } else {
+    valEl.textContent = '--';
+    subEl.textContent = 'enter all 3 fields above';
+    btn.disabled = true;
+  }
+}
+
+function saveFillup() {
+  var ppg = parseFloat(document.getElementById('fuPPG').value);
+  var gal = parseFloat(document.getElementById('fuGal').value);
+  var mi  = parseFloat(document.getElementById('fuMi').value);
+  if (!ppg || !gal || !mi) return;
+
+  var totalCost = ppg * gal;
+  var cpm = totalCost / mi;
+  var mpg = mi / gal;
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+  var timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+  var entry = { ppg: ppg, gal: gal, mi: mi, totalCost: totalCost, cpm: cpm, mpg: mpg, date: dateStr, time: timeStr };
+  fillups.unshift(entry);
+  if (fillups.length > 20) fillups = fillups.slice(0, 20);
+  try { localStorage.setItem('rch_fillups', JSON.stringify(fillups)); } catch(e) {}
+
+  gas = cpm;
+  gasSource = 'fillup ' + dateStr;
+  syncGasBadge();
+
+  document.getElementById('fuPPG').value = '';
+  document.getElementById('fuGal').value = '';
+  document.getElementById('fuMi').value = '';
+  document.getElementById('fuCalcVal').textContent = '--';
+  document.getElementById('fuCalcSub').textContent = 'enter all 3 fields above';
+  document.getElementById('fuSaveBtn').disabled = true;
+
+  var badge = document.getElementById('gasBadge');
+  badge.style.borderColor = '#ffb800';
+  setTimeout(function() { badge.style.borderColor = ''; }, 1000);
+
+  switchTab('history');
+  renderFuHistory();
+}
+
+function renderFuHistory() {
+  var el = document.getElementById('fuHistList');
+  if (!fillups.length) {
+    el.innerHTML = '<div class="empty">No fillups logged yet</div>';
+    return;
+  }
+  var html = '';
+  fillups.forEach(function(f, i) {
+    html += '<div class="fu-hist-item">' +
+      '<div>' +
+        '<div class="fu-hi-date">' + f.date + ' at ' + f.time + (i === 0 ? ' &nbsp;<span style="color:var(--green);font-size:10px;">ACTIVE</span>' : '') + '</div>' +
+        '<div class="fu-hi-detail">$' + f.ppg.toFixed(3) + '/gal &middot; ' + f.gal.toFixed(2) + ' gal &middot; ' + f.mi.toFixed(0) + ' mi &middot; ' + f.mpg.toFixed(1) + ' mpg</div>' +
+      '</div>' +
+      '<div class="fu-hi-cpm">$' + f.cpm.toFixed(4) + '<span>/mi</span></div>' +
+    '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function clearFillups() {
+  fillups = [];
+  try { localStorage.removeItem('rch_fillups'); } catch(e) {}
+  gas = 0.224;
+  gasSource = 'tap to update';
+  syncGasBadge();
+  renderFuHistory();
+}
+
+function manualGas(v) {
+  gas = parseFloat(v);
+  gasSource = 'manual';
+  document.getElementById('gasSliderVal').textContent = '$' + gas.toFixed(3);
+  syncGasBadge();
+}
+
+function setPlatform(btn, name) {
+  document.querySelectorAll('.platform-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  platform = name;
+  clearResult();
+}
+
+function clearResult() {
+  document.getElementById('result').classList.remove('visible');
+}
+
+function getMinFare(mi) {
+  if (mi <= 2) return 9;
+  if (mi <= 4) return 11;
+  if (mi <= 6) return 14;
+  if (mi <= 10) return 18;
+  return 25;
+}
+
+function analyze() {
+  var pay   = parseFloat(document.getElementById('inPay').value);
+  var miles = parseFloat(document.getElementById('inMiles').value);
+
+  if (!pay || !miles || pay <= 0 || miles <= 0) {
+    document.getElementById('inPay').focus();
+    return;
+  }
+
+  document.getElementById('gasPanel').classList.remove('open');
+
+  var ppm      = pay / miles;
+  var gasCost  = miles * gas * 2;
+  var net      = pay - gasCost;
+  var isDDUE   = (platform === 'DD/UE');
+  var minFare  = isDDUE ? 10 : getMinFare(miles);
+  var ppmFloor = isDDUE ? 2.0 : 2.5;
+  var passMin  = (pay >= minFare);
+  var passPPM  = (ppm >= ppmFloor);
+
+  var vClass, vWord, vReason;
+  if (passMin && passPPM) {
+    vClass = 'accept'; vWord = 'ACCEPT';
+    vReason = '$' + ppm.toFixed(2) + '/mi clears $' + ppmFloor.toFixed(2) + ' floor  |  net $' + net.toFixed(2) + ' after 2-way gas';
+  } else if (!passMin && !passPPM) {
+    vClass = 'decline'; vWord = 'DECLINE';
+    vReason = '$' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below $' + minFare + ' min  |  $' + ppm.toFixed(2) + '/mi too low';
+  } else if (!passMin) {
+    vClass = 'decline'; vWord = 'DECLINE';
+    vReason = 'Pay $' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below the $' + minFare + ' minimum for ' + miles.toFixed(1) + ' mi';
+  } else {
+    vClass = 'marginal'; vWord = 'MARGINAL';
+    vReason = '$' + ppm.toFixed(2) + '/mi below $' + ppmFloor.toFixed(2) + ' floor  |  nets $' + net.toFixed(2) + ' after gas';
+  }
+
+  document.getElementById('vBanner').className = 'verdict-banner ' + vClass;
+  document.getElementById('vWord').textContent = vWord;
+  document.getElementById('vReason').textContent = vReason;
+
+  var ppmEl = document.getElementById('sPPM');
+  ppmEl.textContent = '$' + ppm.toFixed(2);
+  ppmEl.className = 'stat-value ' + (ppm >= ppmFloor ? 'green' : ppm >= 2.0 ? 'amber' : 'red');
+  document.getElementById('sPPMsub').textContent = 'floor: $' + ppmFloor.toFixed(2) + '/mi';
+
+  var netEl = document.getElementById('sNet');
+  netEl.textContent = '$' + net.toFixed(2);
+  netEl.className = 'stat-value ' + (net >= 0 ? 'green' : 'red');
+
+  document.getElementById('sGas').textContent = '$' + gasCost.toFixed(2);
+  document.getElementById('sGasSub').textContent = miles.toFixed(1) + 'mi x $' + gas.toFixed(4) + ' x 2';
+
+  var minEl = document.getElementById('sMin');
+  minEl.textContent = '$' + minFare;
+  minEl.className = 'stat-value ' + (passMin ? 'blue' : 'red');
+  document.getElementById('sMinSub').textContent = passMin
+    ? 'cleared by $' + (pay - minFare).toFixed(2)
+    : '$' + (minFare - pay).toFixed(2) + ' short';
+
+  var res = document.getElementById('result');
+  res.classList.add('visible');
+  res.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  hist.unshift({
+    pay: pay, miles: miles, ppm: ppm, net: net,
+    verdict: vClass, platform: platform, gasUsed: gas,
+    time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+  });
+  if (hist.length > 10) hist = hist.slice(0, 10);
+  try { localStorage.setItem('rch', JSON.stringify(hist)); } catch(e) {}
+  renderHistory();
+}
+
+function renderHistory() {
+  var el = document.getElementById('histList');
+  if (!hist.length) {
+    el.innerHTML = '<div class="empty">No runs checked yet</div>';
+    return;
+  }
+  var html = '';
+  hist.forEach(function(h) {
+    html += '<div class="history-item">' +
+      '<div>' +
+        '<div class="h-pay">$' + h.pay.toFixed(2) + ' &middot; ' + h.miles.toFixed(1) + ' mi</div>' +
+        '<div class="h-meta">' + h.platform + ' &middot; $' + h.ppm.toFixed(2) + '/mi &middot; ' + h.time + '</div>' +
+      '</div>' +
+      '<span class="h-badge h-' + h.verdict + '">' + h.verdict.toUpperCase() + '</span>' +
+    '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function clearHistory() {
+  hist = [];
+  try { localStorage.removeItem('rch'); } catch(e) {}
+  renderHistory();
+}
+
+document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyze(); });
+
+syncGasBadge();
+renderHistory();
+</script>
+</body>
+</html>
