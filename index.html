@@ -476,9 +476,15 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <div class="rule-dist">10+ mi</div>
       <div class="rule-right"><div class="rule-min">$25</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
     </div>
-    <div class="rule-chip">
-      <div class="rule-dist">DD / UE</div>
-      <div class="rule-right"><div class="rule-min">$10</div><div class="rule-ppm">always</div></div>
+    <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
+      <div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">DD / UE</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">under 2 mi &rarr; $8 min &nbsp;&nbsp;&nbsp; 2 mi+ &rarr; $10 min &nbsp;&nbsp;&nbsp; always &gt;$2.00/mi</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="rule-min">$8/$10</div>
+        <div class="rule-ppm">&gt;$2.00/mi</div>
+      </div>
     </div>
   </div>
 </div>
@@ -664,7 +670,7 @@ function analyze() {
   var gasCost  = miles * gas * 2;
   var net      = pay - gasCost;
   var isDDUE   = (platform === 'DD/UE');
-  var minFare  = isDDUE ? 10 : getMinFare(miles);
+  var minFare  = isDDUE ? (miles <= 2 ? 8 : 10) : getMinFare(miles);
   var ppmFloor = isDDUE ? 2.0 : 2.5;
   var passMin  = (pay >= minFare);
   var passPPM  = (ppm >= ppmFloor);
