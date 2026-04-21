@@ -478,6 +478,16 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     </div>
     <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
       <div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Pharmacy (miles-based fare)</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">0-4mi &rarr; $9 &nbsp;&nbsp; 4-6mi &rarr; $13 &nbsp;&nbsp; 6-10mi &rarr; $20 &nbsp;&nbsp; 10+mi &rarr; $35</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="rule-min">$9+</div>
+        <div class="rule-ppm">&gt;$2.50/mi</div>
+      </div>
+    </div>
+    <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
+      <div>
         <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">DD / UE</div>
         <div style="font-size:11px;color:var(--muted);margin-top:3px;">under 2 mi &rarr; $8 min &nbsp;&nbsp;&nbsp; 2 mi+ &rarr; $10 min &nbsp;&nbsp;&nbsp; always &gt;$2.00/mi</div>
       </div>
@@ -655,6 +665,13 @@ function getMinFare(mi) {
   return 25;
 }
 
+function getPharmMinFare(mi) {
+  if (mi <= 4) return 9;
+  if (mi <= 6) return 13;
+  if (mi <= 10) return 20;
+  return 35;
+}
+
 function analyze() {
   var pay   = parseFloat(document.getElementById('inPay').value);
   var miles = parseFloat(document.getElementById('inMiles').value);
@@ -670,7 +687,8 @@ function analyze() {
   var gasCost  = miles * gas * 2;
   var net      = pay - gasCost;
   var isDDUE   = (platform === 'DD/UE');
-  var minFare  = isDDUE ? (miles <= 2 ? 8 : 10) : getMinFare(miles);
+  var isPharm  = (platform === 'Pharmacy');
+  var minFare  = isDDUE ? (miles <= 2 ? 8 : 10) : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
   var ppmFloor = isDDUE ? 2.0 : 2.5;
   var passMin  = (pay >= minFare);
   var passPPM  = (ppm >= ppmFloor);
