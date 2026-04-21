@@ -15,8 +15,8 @@
   --border:#252525;
   --border2:#2e2e2e;
   --text:#f0f0f0;
-  --muted:#555;
-  --muted2:#3a3a3a;
+  --muted:#888;
+  --muted2:#555;
   --green:#00e87a;
   --green-dim:rgba(0,232,122,0.10);
   --green-b:rgba(0,232,122,0.25);
@@ -326,6 +326,8 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 .h-decline { background: var(--red-dim); color: var(--red); }
 .empty { font-size: 12px; color: var(--muted); text-align: center; padding: 16px; }
 .spacer { height: 40px; }
+.store-btn { background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--muted);font-family:var(--mono);font-size:12px;padding:7px 12px;cursor:pointer;transition:all .15s;white-space:nowrap; }
+.store-btn.active { background:var(--amber-dim);border-color:var(--amber);color:var(--amber); }
 </style>
 </head>
 <body>
@@ -403,7 +405,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <div class="input-block">
     <label>Pay Offered</label>
     <div class="input-unit">$</div>
-    <input type="number" inputmode="decimal" id="inPay" placeholder="0.00" step="0.01" min="0" oninput="clearResult()">
+    <input type="text" inputmode="numeric" id="inPay" placeholder="0.00" oninput="payKeyup(this)" autocomplete="off">
   </div>
   <div class="input-block">
     <label>Miles</label>
@@ -418,6 +420,33 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <button class="platform-btn" onclick="setPlatform(this,'Pharmacy')">Pharmacy</button>
   <button class="platform-btn" onclick="setPlatform(this,'DD/UE')">DD / UE</button>
   <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
+</div>
+
+<div style="padding: 0 20px; margin-top: 10px;">
+  <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;">Store</label>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:11px;color:var(--muted);" id="travelLabel">home store</span>
+        <div id="storeToggle" onclick="toggleStore()" style="width:40px;height:22px;border-radius:11px;background:var(--green);cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;">
+          <div id="storeKnob" style="position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#000;transition:left .2s;"></div>
+        </div>
+      </div>
+    </div>
+    <div id="storeButtons" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+      <button class="store-btn" onclick="selectStore(this,'4218',3.3)">4218 &nbsp;3.3mi</button>
+      <button class="store-btn" onclick="selectStore(this,'4336',3.2)">4336 &nbsp;3.2mi</button>
+      <button class="store-btn" onclick="selectStore(this,'5429',6.4)">5429 &nbsp;6.4mi</button>
+      <button class="store-btn" onclick="selectStore(this,'4955',3.7)">4955 &nbsp;3.7mi</button>
+      <button class="store-btn" onclick="selectStore(this,'other',0)" id="storeOtherBtn">Other</button>
+    </div>
+    <div id="storeOtherInput" style="display:none;margin-bottom:8px;">
+      <input type="number" inputmode="decimal" id="customStoreMi" placeholder="miles to store" step="0.1" min="0"
+        style="background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:16px;padding:8px 10px;width:100%;outline:none;"
+        oninput="setCustomStore(this.value)">
+    </div>
+    <div id="travelNote" style="display:none;font-size:11px;color:var(--amber);"></div>
+  </div>
 </div>
 
 <div class="analyze-wrap">
@@ -515,6 +544,9 @@ var gasSource = 'tap to update';
 var platform = 'Spark Shop';
 var hist = [];
 var fillups = [];
+var travelMiles = 0;
+var isHomeStore = true;
+var selectedStore = null;
 
 try { hist = JSON.parse(localStorage.getItem('rch') || '[]'); } catch(e) { hist = []; }
 try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch(e) { fillups = []; }
@@ -522,6 +554,71 @@ try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch
 if (fillups.length > 0) {
   gas = fillups[0].cpm;
   gasSource = 'fillup ' + fillups[0].date;
+}
+
+function payKeyup(el) {
+  var raw = el.value.replace(/[^0-9]/g, '');
+  if (raw === '') { el.value = ''; clearResult(); return; }
+  var cents = parseInt(raw, 10);
+  if (cents > 999999) cents = 999999;
+  el.value = (cents / 100).toFixed(2);
+  clearResult();
+}
+
+function toggleStore() {
+  isHomeStore = !isHomeStore;
+  var knob = document.getElementById('storeKnob');
+  var toggle = document.getElementById('storeToggle');
+  var btns = document.getElementById('storeButtons');
+  var note = document.getElementById('travelNote');
+  var label = document.getElementById('travelLabel');
+  if (isHomeStore) {
+    knob.style.left = '3px';
+    toggle.style.background = 'var(--green)';
+    btns.style.display = 'none';
+    document.getElementById('storeOtherInput').style.display = 'none';
+    note.style.display = 'none';
+    label.textContent = 'home store';
+    travelMiles = 0;
+    selectedStore = null;
+    document.querySelectorAll('.store-btn').forEach(function(b) { b.classList.remove('active'); });
+  } else {
+    knob.style.left = '21px';
+    toggle.style.background = 'var(--amber)';
+    btns.style.display = 'flex';
+    label.textContent = 'away store';
+    if (selectedStore) updateTravelNote();
+  }
+  clearResult();
+}
+
+function selectStore(btn, id, mi) {
+  document.querySelectorAll('.store-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  selectedStore = id;
+  if (id === 'other') {
+    travelMiles = 0;
+    document.getElementById('storeOtherInput').style.display = 'block';
+    document.getElementById('travelNote').style.display = 'none';
+  } else {
+    travelMiles = mi;
+    document.getElementById('storeOtherInput').style.display = 'none';
+    updateTravelNote();
+  }
+  clearResult();
+}
+
+function setCustomStore(v) {
+  travelMiles = parseFloat(v) || 0;
+  if (travelMiles > 0) updateTravelNote();
+  clearResult();
+}
+
+function updateTravelNote() {
+  var note = document.getElementById('travelNote');
+  var extraGas = (travelMiles * gas).toFixed(2);
+  note.textContent = '+' + travelMiles.toFixed(1) + ' mi travel added to total  |  extra gas $' + extraGas;
+  note.style.display = 'block';
 }
 
 function syncGasBadge() {
@@ -673,8 +770,9 @@ function getPharmMinFare(mi) {
 }
 
 function analyze() {
-  var pay   = parseFloat(document.getElementById('inPay').value);
-  var miles = parseFloat(document.getElementById('inMiles').value);
+  var payRaw = document.getElementById('inPay').value.replace(/[^0-9.]/g, '');
+  var pay    = parseFloat(payRaw);
+  var miles  = parseFloat(document.getElementById('inMiles').value);
 
   if (!pay || !miles || pay <= 0 || miles <= 0) {
     document.getElementById('inPay').focus();
@@ -683,29 +781,32 @@ function analyze() {
 
   document.getElementById('gasPanel').classList.remove('open');
 
-  var ppm      = pay / miles;
-  var gasCost  = miles * gas * 2;
-  var net      = pay - gasCost;
-  var isDDUE   = (platform === 'DD/UE');
-  var isPharm  = (platform === 'Pharmacy');
-  var minFare  = isDDUE ? (miles <= 2 ? 8 : 10) : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
-  var ppmFloor = isDDUE ? 2.0 : 2.5;
-  var passMin  = (pay >= minFare);
-  var passPPM  = (ppm >= ppmFloor);
+  var totalMiles = miles + travelMiles;
+  var ppm        = pay / totalMiles;
+  var gasCost    = (miles * gas * 2) + (travelMiles * gas);
+  var net        = pay - gasCost;
+  var isDDUE     = (platform === 'DD/UE');
+  var isPharm    = (platform === 'Pharmacy');
+  var minFare    = isDDUE ? (miles <= 2 ? 8 : 10) : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
+  var ppmFloor   = isDDUE ? 2.0 : 2.5;
+  var passMin    = (pay >= minFare);
+  var passPPM    = (ppm >= ppmFloor);
+
+  var storeNote = travelMiles > 0 ? ' (incl. ' + travelMiles.toFixed(1) + 'mi travel)' : '';
 
   var vClass, vWord, vReason;
   if (passMin && passPPM) {
     vClass = 'accept'; vWord = 'ACCEPT';
-    vReason = '$' + ppm.toFixed(2) + '/mi clears $' + ppmFloor.toFixed(2) + ' floor  |  net $' + net.toFixed(2) + ' after 2-way gas';
+    vReason = '$' + ppm.toFixed(2) + '/mi' + storeNote + ' clears $' + ppmFloor.toFixed(2) + ' floor  |  net $' + net.toFixed(2) + ' after gas';
   } else if (!passMin && !passPPM) {
     vClass = 'decline'; vWord = 'DECLINE';
-    vReason = '$' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below $' + minFare + ' min  |  $' + ppm.toFixed(2) + '/mi too low';
+    vReason = '$' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below $' + minFare + ' min  |  $' + ppm.toFixed(2) + '/mi' + storeNote + ' too low';
   } else if (!passMin) {
     vClass = 'decline'; vWord = 'DECLINE';
     vReason = 'Pay $' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below the $' + minFare + ' minimum for ' + miles.toFixed(1) + ' mi';
   } else {
     vClass = 'marginal'; vWord = 'MARGINAL';
-    vReason = '$' + ppm.toFixed(2) + '/mi below $' + ppmFloor.toFixed(2) + ' floor  |  nets $' + net.toFixed(2) + ' after gas';
+    vReason = '$' + ppm.toFixed(2) + '/mi' + storeNote + ' below $' + ppmFloor.toFixed(2) + ' floor  |  nets $' + net.toFixed(2) + ' after gas';
   }
 
   document.getElementById('vBanner').className = 'verdict-banner ' + vClass;
@@ -715,14 +816,16 @@ function analyze() {
   var ppmEl = document.getElementById('sPPM');
   ppmEl.textContent = '$' + ppm.toFixed(2);
   ppmEl.className = 'stat-value ' + (ppm >= ppmFloor ? 'green' : ppm >= 2.0 ? 'amber' : 'red');
-  document.getElementById('sPPMsub').textContent = 'floor: $' + ppmFloor.toFixed(2) + '/mi';
+  document.getElementById('sPPMsub').textContent = 'floor: $' + ppmFloor.toFixed(2) + '/mi' + (travelMiles > 0 ? ' w/ travel' : '');
 
   var netEl = document.getElementById('sNet');
   netEl.textContent = '$' + net.toFixed(2);
   netEl.className = 'stat-value ' + (net >= 0 ? 'green' : 'red');
 
   document.getElementById('sGas').textContent = '$' + gasCost.toFixed(2);
-  document.getElementById('sGasSub').textContent = miles.toFixed(1) + 'mi x $' + gas.toFixed(4) + ' x 2';
+  document.getElementById('sGasSub').textContent = travelMiles > 0
+    ? 'delivery 2-way + ' + travelMiles.toFixed(1) + 'mi travel'
+    : miles.toFixed(1) + 'mi x $' + gas.toFixed(4) + ' x 2';
 
   var minEl = document.getElementById('sMin');
   minEl.textContent = '$' + minFare;
@@ -736,13 +839,16 @@ function analyze() {
   res.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   hist.unshift({
-    pay: pay, miles: miles, ppm: ppm, net: net,
+    pay: pay, miles: miles, travelMiles: travelMiles, ppm: ppm, net: net,
     verdict: vClass, platform: platform, gasUsed: gas,
     time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
   });
   if (hist.length > 10) hist = hist.slice(0, 10);
   try { localStorage.setItem('rch', JSON.stringify(hist)); } catch(e) {}
   renderHistory();
+
+  document.getElementById('inPay').value = '';
+  document.getElementById('inMiles').value = '';
 }
 
 function renderHistory() {
@@ -755,7 +861,7 @@ function renderHistory() {
   hist.forEach(function(h) {
     html += '<div class="history-item">' +
       '<div>' +
-        '<div class="h-pay">$' + h.pay.toFixed(2) + ' &middot; ' + h.miles.toFixed(1) + ' mi</div>' +
+        '<div class="h-pay">$' + h.pay.toFixed(2) + ' &middot; ' + h.miles.toFixed(1) + 'mi' + (h.travelMiles > 0 ? ' +' + h.travelMiles.toFixed(1) + ' travel' : '') + '</div>' +
         '<div class="h-meta">' + h.platform + ' &middot; $' + h.ppm.toFixed(2) + '/mi &middot; ' + h.time + '</div>' +
       '</div>' +
       '<span class="h-badge h-' + h.verdict + '">' + h.verdict.toUpperCase() + '</span>' +
