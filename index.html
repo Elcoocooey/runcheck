@@ -336,6 +336,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <div>
     <div class="app-title">RUN<span>CHECK</span></div>
     <div class="app-sub">delivery run analyzer</div>
+    <div id="todayDate" style="font-size:12px;color:var(--amber);margin-top:4px;font-weight:500;letter-spacing:0.02em;"></div>
   </div>
   <div class="gas-badge" id="gasBadge" onclick="toggleGasPanel()">
     <div class="badge-label">gas / mi</div>
@@ -438,12 +439,6 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <button class="store-btn" onclick="selectStore(this,'4336',3.2)">4336 &nbsp;3.2mi</button>
       <button class="store-btn" onclick="selectStore(this,'5429',6.4)">5429 &nbsp;6.4mi</button>
       <button class="store-btn" onclick="selectStore(this,'4955',3.7)">4955 &nbsp;3.7mi</button>
-      <button class="store-btn" onclick="selectStore(this,'other',0)" id="storeOtherBtn">Other</button>
-    </div>
-    <div id="storeOtherInput" style="display:none;margin-bottom:8px;">
-      <input type="number" inputmode="decimal" id="customStoreMi" placeholder="miles to store" step="0.1" min="0"
-        style="background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:16px;padding:8px 10px;width:100%;outline:none;"
-        oninput="setCustomStore(this.value)">
     </div>
     <div id="travelNote" style="display:none;font-size:11px;color:var(--amber);"></div>
   </div>
@@ -457,6 +452,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <div class="verdict-banner" id="vBanner">
     <div class="verdict-word" id="vWord">--</div>
     <div class="verdict-reason" id="vReason"></div>
+    <div id="vThreshold" style="display:none;margin-top:10px;background:rgba(0,0,0,0.25);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:500;"></div>
   </div>
   <div class="stats-grid">
     <div class="stat">
@@ -559,9 +555,13 @@ if (fillups.length > 0) {
 function payKeyup(el) {
   var raw = el.value.replace(/[^0-9]/g, '');
   if (raw === '') { el.value = ''; clearResult(); return; }
-  var cents = parseInt(raw, 10);
-  if (cents > 999999) cents = 999999;
-  el.value = (cents / 100).toFixed(2);
+  if (raw.length <= 2) {
+    el.value = parseInt(raw, 10).toFixed(2);
+  } else {
+    var cents = parseInt(raw, 10);
+    if (cents > 999999) cents = 999999;
+    el.value = (cents / 100).toFixed(2);
+  }
   clearResult();
 }
 
@@ -576,7 +576,6 @@ function toggleStore() {
     knob.style.left = '3px';
     toggle.style.background = 'var(--green)';
     btns.style.display = 'none';
-    document.getElementById('storeOtherInput').style.display = 'none';
     note.style.display = 'none';
     label.textContent = 'home store';
     travelMiles = 0;
@@ -596,21 +595,8 @@ function selectStore(btn, id, mi) {
   document.querySelectorAll('.store-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   selectedStore = id;
-  if (id === 'other') {
-    travelMiles = 0;
-    document.getElementById('storeOtherInput').style.display = 'block';
-    document.getElementById('travelNote').style.display = 'none';
-  } else {
-    travelMiles = mi;
-    document.getElementById('storeOtherInput').style.display = 'none';
-    updateTravelNote();
-  }
-  clearResult();
-}
-
-function setCustomStore(v) {
-  travelMiles = parseFloat(v) || 0;
-  if (travelMiles > 0) updateTravelNote();
+  travelMiles = mi;
+  updateTravelNote();
   clearResult();
 }
 
@@ -794,24 +780,35 @@ function analyze() {
 
   var storeNote = travelMiles > 0 ? ' (incl. ' + travelMiles.toFixed(1) + 'mi travel)' : '';
 
-  var vClass, vWord, vReason;
+  var ppmTarget  = ppmFloor * totalMiles;
+  var acceptAt   = Math.ceil(Math.max(minFare, ppmTarget) * 100) / 100;
+
+  var vClass, vWord, vReason, showThresh = false;
   if (passMin && passPPM) {
     vClass = 'accept'; vWord = 'ACCEPT';
     vReason = '$' + ppm.toFixed(2) + '/mi' + storeNote + ' clears $' + ppmFloor.toFixed(2) + ' floor  |  net $' + net.toFixed(2) + ' after gas';
   } else if (!passMin && !passPPM) {
-    vClass = 'decline'; vWord = 'DECLINE';
+    vClass = 'decline'; vWord = 'DECLINE'; showThresh = true;
     vReason = '$' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below $' + minFare + ' min  |  $' + ppm.toFixed(2) + '/mi' + storeNote + ' too low';
   } else if (!passMin) {
-    vClass = 'decline'; vWord = 'DECLINE';
+    vClass = 'decline'; vWord = 'DECLINE'; showThresh = true;
     vReason = 'Pay $' + pay.toFixed(2) + ' is $' + (minFare - pay).toFixed(2) + ' below the $' + minFare + ' minimum for ' + miles.toFixed(1) + ' mi';
   } else {
-    vClass = 'marginal'; vWord = 'MARGINAL';
+    vClass = 'marginal'; vWord = 'MARGINAL'; showThresh = true;
     vReason = '$' + ppm.toFixed(2) + '/mi' + storeNote + ' below $' + ppmFloor.toFixed(2) + ' floor  |  nets $' + net.toFixed(2) + ' after gas';
   }
 
   document.getElementById('vBanner').className = 'verdict-banner ' + vClass;
   document.getElementById('vWord').textContent = vWord;
   document.getElementById('vReason').textContent = vReason;
+
+  var thresh = document.getElementById('vThreshold');
+  if (showThresh) {
+    thresh.style.display = 'block';
+    thresh.textContent = 'Accepts at $' + acceptAt.toFixed(2) + '+  --  needs $' + (acceptAt - pay).toFixed(2) + ' more';
+  } else {
+    thresh.style.display = 'none';
+  }
 
   var ppmEl = document.getElementById('sPPM');
   ppmEl.textContent = '$' + ppm.toFixed(2);
@@ -841,6 +838,7 @@ function analyze() {
   hist.unshift({
     pay: pay, miles: miles, travelMiles: travelMiles, ppm: ppm, net: net,
     verdict: vClass, platform: platform, gasUsed: gas,
+    acceptAt: showThresh ? acceptAt : null,
     time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
   });
   if (hist.length > 10) hist = hist.slice(0, 10);
@@ -849,6 +847,22 @@ function analyze() {
 
   document.getElementById('inPay').value = '';
   document.getElementById('inMiles').value = '';
+
+  resetStore();
+}
+
+function resetStore() {
+  if (!isHomeStore) {
+    isHomeStore = true;
+    travelMiles = 0;
+    selectedStore = null;
+    document.getElementById('storeKnob').style.left = '3px';
+    document.getElementById('storeToggle').style.background = 'var(--green)';
+    document.getElementById('storeButtons').style.display = 'none';
+    document.getElementById('travelNote').style.display = 'none';
+    document.getElementById('travelLabel').textContent = 'home store';
+    document.querySelectorAll('.store-btn').forEach(function(b) { b.classList.remove('active'); });
+  }
 }
 
 function renderHistory() {
@@ -859,10 +873,12 @@ function renderHistory() {
   }
   var html = '';
   hist.forEach(function(h) {
+    var travelStr = h.travelMiles > 0 ? ' +' + h.travelMiles.toFixed(1) + ' travel' : '';
+    var acceptStr = h.acceptAt ? '  &middot;  accepts at $' + h.acceptAt.toFixed(2) + '+' : '';
     html += '<div class="history-item">' +
       '<div>' +
-        '<div class="h-pay">$' + h.pay.toFixed(2) + ' &middot; ' + h.miles.toFixed(1) + 'mi' + (h.travelMiles > 0 ? ' +' + h.travelMiles.toFixed(1) + ' travel' : '') + '</div>' +
-        '<div class="h-meta">' + h.platform + ' &middot; $' + h.ppm.toFixed(2) + '/mi &middot; ' + h.time + '</div>' +
+        '<div class="h-pay">$' + h.pay.toFixed(2) + ' &middot; ' + h.miles.toFixed(1) + 'mi' + travelStr + '</div>' +
+        '<div class="h-meta">' + h.platform + ' &middot; $' + h.ppm.toFixed(2) + '/mi &middot; ' + h.time + acceptStr + '</div>' +
       '</div>' +
       '<span class="h-badge h-' + h.verdict + '">' + h.verdict.toUpperCase() + '</span>' +
     '</div>';
@@ -877,6 +893,15 @@ function clearHistory() {
 }
 
 document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyze(); });
+
+// Set day and date in header
+(function() {
+  var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var now = new Date();
+  var str = days[now.getDay()] + '  ' + months[now.getMonth()] + ' ' + now.getDate();
+  document.getElementById('todayDate').textContent = str;
+})();
 
 syncGasBadge();
 renderHistory();
