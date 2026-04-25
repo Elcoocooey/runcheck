@@ -406,7 +406,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <div class="input-block">
     <label>Pay Offered</label>
     <div class="input-unit">$</div>
-    <input type="text" inputmode="numeric" id="inPay" placeholder="0.00" oninput="payKeyup(this)" autocomplete="off">
+    <input type="text" inputmode="numeric" id="inPay" placeholder="0.00" oninput="clearResult()" onblur="payBlur(this)" autocomplete="off">
   </div>
   <div class="input-block">
     <label>Miles</label>
@@ -552,9 +552,9 @@ if (fillups.length > 0) {
   gasSource = 'fillup ' + fillups[0].date;
 }
 
-function payKeyup(el) {
+function payBlur(el) {
   var raw = el.value.replace(/[^0-9]/g, '');
-  if (raw === '') { el.value = ''; clearResult(); return; }
+  if (raw === '') { el.value = ''; return; }
   if (raw.length <= 2) {
     el.value = parseInt(raw, 10).toFixed(2);
   } else {
@@ -562,7 +562,6 @@ function payKeyup(el) {
     if (cents > 999999) cents = 999999;
     el.value = (cents / 100).toFixed(2);
   }
-  clearResult();
 }
 
 function toggleStore() {
