@@ -471,7 +471,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 <div class="pace-bar" id="paceBar">
   <div class="pace-top">
     <span class="pace-title">shift pace &nbsp;<span id="paceEarnedInline" style="color:var(--green);font-weight:bold;"></span></span>
-    <button class="pace-edit" onclick="togglePaceEdit()">edit</button>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <button class="pace-edit" onclick="resetPace()" style="color:var(--red);">reset</button>
+      <button class="pace-edit" onclick="togglePaceEdit()" id="paceEditBtn">edit</button>
+    </div>
   </div>
   <div class="pace-inputs" id="paceInputs">
     <div class="pace-input-block">
@@ -893,10 +896,22 @@ function earnedBlur(el) {
   }
 }
 
+function resetPace() {
+  paceEarned = 0;
+  paceHrs    = 7;
+  document.getElementById('paceEarnedIn').value = '';
+  document.getElementById('paceHrsIn').value = 7;
+  try {
+    var oldPace = JSON.parse(localStorage.getItem('rch_pace') || '{}');
+    localStorage.setItem('rch_pace', JSON.stringify({t: oldPace.t || 150, h: 7, e: 0}));
+  } catch(x) {}
+  updatePace();
+}
+
 function togglePaceEdit() {
   paceEditOpen = !paceEditOpen;
   var inputs = document.getElementById('paceInputs');
-  var btn = document.querySelector('.pace-edit');
+  var btn = document.getElementById('paceEditBtn');
   if (!paceEditOpen) {
     // Closing -- add entered amount to running total
     var raw = document.getElementById('paceEarnedIn').value.replace(/[^0-9.]/g, '');
