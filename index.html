@@ -346,6 +346,109 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 .pace-progress { margin-top:10px; background:var(--border); border-radius:4px; height:5px; overflow:hidden; }
 .pace-fill { height:100%; border-radius:4px; background:var(--green); transition:width .3s; }
 .stat-value.purple { color:var(--purple); }
+
+/* LOG BADGE */
+.log-badge {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  text-align: right;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  min-width: 60px;
+}
+.log-badge:active { border-color: var(--blue); }
+.log-badge .badge-label { font-size: 9px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.log-badge .badge-val { display: block; color: var(--blue); font-size: 18px; font-weight: bold; line-height: 1.3; }
+.log-badge .badge-src { font-size: 9px; color: var(--muted2); margin-top: 1px; }
+
+/* LOG PANEL */
+.log-panel {
+  margin: 12px 20px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  display: none;
+}
+.log-panel.open { display: block; }
+.log-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.log-tab {
+  flex: 1; padding: 11px 6px; font-size: 12px; font-family: var(--mono);
+  color: var(--muted); background: none; border: none; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s; text-align: center;
+}
+.log-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.log-pane { display: none; padding: 14px; }
+.log-pane.active { display: block; }
+
+/* LOG ENTRIES */
+.log-entry {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  position: relative;
+}
+.log-entry.accepted { border-color: var(--green-b); background: var(--green-dim); }
+.log-entry.fcfs { border-left: 3px solid var(--amber); }
+.log-entry-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+.log-entry-pay { font-size: 16px; font-weight: bold; color: var(--text); }
+.log-entry-verdict { font-size: 10px; padding: 2px 8px; border-radius: 100px; font-weight: bold; }
+.le-accept { background: var(--green-dim); color: var(--green); }
+.le-decline { background: var(--red-dim); color: var(--red); }
+.le-marginal { background: var(--amber-dim); color: var(--amber); }
+.log-entry-meta { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.log-entry-threshold { font-size: 11px; color: var(--amber); margin-top: 3px; }
+.log-accept-btn {
+  width: 100%; margin-top: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--muted); font-family: var(--mono);
+  font-size: 11px; padding: 7px; cursor: pointer; transition: all .15s;
+  text-align: center;
+}
+.log-accept-btn.on { background: var(--green-dim); border-color: var(--green); color: var(--green); font-weight: bold; }
+
+/* FCFS toggle row */
+.fcfs-row {
+  margin: 10px 20px 0;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.fcfs-label { font-size: 12px; color: var(--muted); }
+.fcfs-label strong { color: var(--amber); font-size: 13px; }
+.fcfs-toggle {
+  width: 40px; height: 22px; border-radius: 11px;
+  background: var(--border); cursor: pointer;
+  position: relative; transition: background .2s; flex-shrink: 0;
+}
+.fcfs-toggle.on { background: var(--amber); }
+.fcfs-knob {
+  position: absolute; top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: left .2s;
+}
+.fcfs-toggle.on .fcfs-knob { left: 21px; }
+
+/* Export */
+.export-btn {
+  width: 100%; background: var(--blue); border: none; border-radius: 10px;
+  color: #fff; font-family: var(--mono); font-size: 14px; font-weight: bold;
+  padding: 13px; cursor: pointer; transition: opacity .1s; margin-top: 8px;
+}
+.export-btn:active { opacity: 0.85; }
+.export-info { font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; line-height: 1.6; }
+.log-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+.log-sum-box { background: var(--surface2); border-radius: 8px; padding: 8px; text-align: center; }
+.log-sum-val { font-size: 18px; font-weight: bold; }
+.log-sum-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -356,10 +459,17 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     <div class="app-sub">delivery run analyzer</div>
     <div id="todayDate" style="font-size:12px;color:var(--amber);margin-top:4px;font-weight:500;letter-spacing:0.02em;"></div>
   </div>
-  <div class="gas-badge" id="gasBadge" onclick="toggleGasPanel()">
-    <div class="badge-label">gas / mi</div>
-    <strong class="badge-val" id="gasBadgeVal">$0.224</strong>
-    <div class="badge-src" id="gasBadgeSrc">tap to update</div>
+  <div style="display:flex;gap:8px;align-items:flex-start;">
+    <div class="log-badge" onclick="toggleLogPanel()">
+      <div class="badge-label">offers</div>
+      <strong class="badge-val" id="logBadgeVal">0</strong>
+      <div class="badge-src" id="logBadgeSrc">today</div>
+    </div>
+    <div class="gas-badge" id="gasBadge" onclick="toggleGasPanel()">
+      <div class="badge-label">gas / mi</div>
+      <strong class="badge-val" id="gasBadgeVal">$0.224</strong>
+      <div class="badge-src" id="gasBadgeSrc">tap to update</div>
+    </div>
   </div>
 </header>
 
@@ -420,6 +530,40 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
 </div>
 
+<div class="log-panel" id="logPanel">
+  <div class="log-tabs">
+    <button class="log-tab active" onclick="switchLogTab('today')">Today's Log</button>
+    <button class="log-tab" onclick="switchLogTab('export')">Export</button>
+  </div>
+  <div class="log-pane active" id="lpane-today">
+    <div class="log-summary">
+      <div class="log-sum-box"><div class="log-sum-val" id="lsTotal" style="color:var(--blue);">0</div><div class="log-sum-lbl">pings</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="lsAccepted" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="lsFCFS" style="color:var(--amber);">0</div><div class="log-sum-lbl">from FCFS</div></div>
+    </div>
+    <div id="logList"><div class="empty">No offers logged today</div></div>
+  </div>
+  <div class="log-pane" id="lpane-export">
+    <div class="log-summary">
+      <div class="log-sum-box"><div class="log-sum-val" id="lsTotal2" style="color:var(--blue);">0</div><div class="log-sum-lbl">pings</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="lsAccepted2" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="lsDeclined2" style="color:var(--red);">0</div><div class="log-sum-lbl">not accepted</div></div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">Hours Worked Today</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button onclick="adjustShiftHrs(-0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">-</button>
+        <input type="number" inputmode="decimal" id="shiftHrsWorked" value="0" min="0" max="16" step="0.5"
+          style="background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:28px;font-weight:bold;width:100%;text-align:center;-webkit-appearance:none;">
+        <button onclick="adjustShiftHrs(0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">+</button>
+      </div>
+      <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">hrs &nbsp;&middot;&nbsp; <span id="offersPerHr">--</span> offers/hr</div>
+    </div>
+    <button class="export-btn" onclick="exportCSV()">DOWNLOAD TODAY'S CSV</button>
+    <div class="export-info">Downloads a CSV of all offers checked today including hours worked.<br>Add to your weekly offer tracking workbook.</div>
+  </div>
+</div>
+
 <div class="inputs" style="grid-template-columns:1fr 1fr 1fr;">
   <div class="input-block">
     <label>Pay Offered</label>
@@ -468,6 +612,16 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
 </div>
 
+<div class="fcfs-row">
+  <div class="fcfs-label">Source: &nbsp;<strong id="fcfsLabel">Offer Ping</strong></div>
+  <div>
+    <span style="font-size:10px;color:var(--muted);margin-right:8px;">FCFS Board</span>
+    <div class="fcfs-toggle" id="fcfsToggle" onclick="toggleFCFS()">
+      <div class="fcfs-knob"></div>
+    </div>
+  </div>
+</div>
+
 <div class="pace-bar" id="paceBar">
   <div class="pace-top">
     <span class="pace-title">shift pace &nbsp;<span id="paceEarnedInline" style="color:var(--green);font-weight:bold;"></span></span>
@@ -479,7 +633,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <div class="pace-inputs" id="paceInputs">
     <div class="pace-input-block">
       <label>Target $</label>
-      <input type="number" inputmode="decimal" id="paceTargetIn" value="150" min="0" oninput="updatePace()">
+      <input type="number" inputmode="decimal" id="paceTargetIn" value="125" min="0" oninput="updatePace()">
     </div>
     <div class="pace-input-block">
       <label>Hrs Left</label>
@@ -496,7 +650,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
   <div class="pace-stats">
     <div class="pace-stat">
-      <div class="pace-stat-val" id="paceNeed" style="color:var(--amber);">$150</div>
+      <div class="pace-stat-val" id="paceNeed" style="color:var(--amber);">$125</div>
       <div class="pace-stat-lbl">need</div>
     </div>
     <div class="pace-stat">
@@ -595,22 +749,14 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
       <div>
         <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">DD / UE</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px;">under 2 mi &rarr; $8 min &nbsp;&nbsp;&nbsp; 2 mi+ &rarr; $10 min &nbsp;&nbsp;&nbsp; always &gt;$2.00/mi</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">flat $8 minimum &nbsp;&nbsp;&nbsp; always &gt;$2.00/mi</div>
       </div>
       <div style="text-align:right;">
-        <div class="rule-min">$8/$10</div>
+        <div class="rule-min">$8</div>
         <div class="rule-ppm">&gt;$2.00/mi</div>
       </div>
     </div>
   </div>
-</div>
-
-<div class="section">
-  <div class="section-title">
-    <span>recent runs</span>
-    <button class="clear-btn" onclick="clearHistory()">clear all</button>
-  </div>
-  <div class="history-list" id="histList"><div class="empty">No runs checked yet</div></div>
 </div>
 
 <div class="spacer"></div>
@@ -621,16 +767,19 @@ var gasSource = 'tap to update';
 var platform = 'Spark Shop';
 var hist = [];
 var fillups = [];
+var offerLog = [];
 var travelMiles = 0;
 var isHomeStore = true;
 var selectedStore = null;
-var paceTarget = 150;
+var isFCFS = false;
+var paceTarget = 125;
 var paceHrs = 7;
 var paceEarned = 0;
 var paceEditOpen = false;
 
 try { hist = JSON.parse(localStorage.getItem('rch') || '[]'); } catch(e) { hist = []; }
 try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch(e) { fillups = []; }
+try { offerLog = JSON.parse(localStorage.getItem('rch_log') || '[]'); } catch(e) { offerLog = []; }
 
 if (fillups.length > 0) {
   gas = fillups[0].cpm;
@@ -903,7 +1052,7 @@ function resetPace() {
   document.getElementById('paceHrsIn').value = 7;
   try {
     var oldPace = JSON.parse(localStorage.getItem('rch_pace') || '{}');
-    localStorage.setItem('rch_pace', JSON.stringify({t: oldPace.t || 150, h: 7, e: 0}));
+    localStorage.setItem('rch_pace', JSON.stringify({t: oldPace.t || 125, h: 7, e: 0}));
   } catch(x) {}
   updatePace();
 }
@@ -917,7 +1066,7 @@ function togglePaceEdit() {
     var raw = document.getElementById('paceEarnedIn').value.replace(/[^0-9.]/g, '');
     var added = parseFloat(raw) || 0;
     paceEarned = paceEarned + added;
-    paceTarget = parseFloat(document.getElementById('paceTargetIn').value) || 150;
+    paceTarget = parseFloat(document.getElementById('paceTargetIn').value) || 125;
     paceHrs    = parseFloat(document.getElementById('paceHrsIn').value) || 7;
     try { localStorage.setItem('rch_pace', JSON.stringify({t:paceTarget,h:paceHrs,e:paceEarned})); } catch(x) {}
     inputs.style.display = 'none';
@@ -932,14 +1081,14 @@ function togglePaceEdit() {
 }
 
 function savePace() {
-  paceTarget = parseFloat(document.getElementById('paceTargetIn').value) || 150;
+  paceTarget = parseFloat(document.getElementById('paceTargetIn').value) || 125;
   paceHrs    = parseFloat(document.getElementById('paceHrsIn').value) || 7;
   try { localStorage.setItem('rch_pace', JSON.stringify({t:paceTarget,h:paceHrs,e:paceEarned})); } catch(x) {}
   updatePace();
 }
 
 function updatePace() {
-  paceTarget = parseFloat(document.getElementById('paceTargetIn').value) || 150;
+  paceTarget = parseFloat(document.getElementById('paceTargetIn').value) || 125;
   paceHrs    = parseFloat(document.getElementById('paceHrsIn').value) || 7;
   var need   = Math.max(0, paceTarget - paceEarned);
   var perHr  = paceHrs > 0 ? need / paceHrs : 0;
@@ -957,6 +1106,169 @@ function updatePace() {
 
   var inlineEl = document.getElementById('paceEarnedInline');
   inlineEl.textContent = paceEarned > 0 ? '-- $' + paceEarned.toFixed(2) + ' earned' : '';
+}
+
+function toggleFCFS() {
+  isFCFS = !isFCFS;
+  applyFCFSUI();
+}
+
+function resetFCFS() {
+  isFCFS = false;
+  applyFCFSUI();
+}
+
+function applyFCFSUI() {
+  var t = document.getElementById('fcfsToggle');
+  var l = document.getElementById('fcfsLabel');
+  if (isFCFS) {
+    t.classList.add('on');
+    l.textContent = 'FCFS Board';
+    l.style.color = 'var(--amber)';
+  } else {
+    t.classList.remove('on');
+    l.textContent = 'Offer Ping';
+    l.style.color = '';
+  }
+}
+
+function toggleLogPanel() {
+  var p = document.getElementById('logPanel');
+  var g = document.getElementById('gasPanel');
+  g.classList.remove('open');
+  p.classList.toggle('open');
+  if (p.classList.contains('open')) renderLog();
+}
+
+function toggleGasPanel() {
+  var g = document.getElementById('gasPanel');
+  var p = document.getElementById('logPanel');
+  p.classList.remove('open');
+  g.classList.toggle('open');
+  if (g.classList.contains('open')) renderFuHistory();
+}
+
+function switchLogTab(name) {
+  document.querySelectorAll('.log-tab').forEach(function(t,i) {
+    var names = ['today','export'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.log-pane').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById('lpane-' + name).classList.add('active');
+  if (name === 'export') renderExportSummary();
+}
+
+function saveOfferLog() {
+  try { localStorage.setItem('rch_log', JSON.stringify(offerLog)); } catch(e) {}
+}
+
+function updateLogBadge() {
+  var pings    = offerLog.filter(function(e) { return !e.fcfs; }).length;
+  var accepted = offerLog.filter(function(e) { return e.accepted; }).length;
+  document.getElementById('logBadgeVal').textContent = pings;
+  document.getElementById('logBadgeSrc').textContent = accepted + ' accepted';
+}
+
+function renderLog() {
+  var el = document.getElementById('logList');
+  var pings    = offerLog.filter(function(e) { return !e.fcfs; }).length;
+  var accepted = offerLog.filter(function(e) { return e.accepted; }).length;
+  var fcfs     = offerLog.filter(function(e) { return e.fcfs; }).length;
+  document.getElementById('lsTotal').textContent    = pings;
+  document.getElementById('lsAccepted').textContent = accepted;
+  document.getElementById('lsFCFS').textContent     = fcfs;
+  if (!offerLog.length) { el.innerHTML = '<div class="empty">No offers logged today</div>'; return; }
+  var html = '';
+  offerLog.forEach(function(e, i) {
+    var vcls = e.verdict === 'ACCEPT' ? 'le-accept' : e.verdict === 'MARGINAL' ? 'le-marginal' : 'le-decline';
+    var entryCls = 'log-entry' + (e.accepted ? ' accepted' : '') + (e.fcfs ? ' fcfs' : '');
+    var fcfsBadge = e.fcfs ? ' &nbsp;<span style="color:var(--amber);font-size:9px;font-weight:bold;">FCFS</span>' : '';
+    var threshold = (!e.accepted && e.acceptAt) ? '<div class="log-entry-threshold">accepts at $' + e.acceptAt.toFixed(2) + '+</div>' : '';
+    var btnTxt = e.accepted ? '+ ACCEPTED' : 'Mark Accepted';
+    var btnCls = 'log-accept-btn' + (e.accepted ? ' on' : '');
+    html += '<div class="' + entryCls + '">' +
+      '<div class="log-entry-top">' +
+        '<div>' +
+          '<span class="log-entry-pay">$' + e.pay.toFixed(2) + '</span>' +
+          '<span style="font-size:11px;color:var(--muted);"> &nbsp;' + e.miles.toFixed(1) + 'mi</span>' +
+          fcfsBadge +
+        '</div>' +
+        '<span class="log-entry-verdict ' + vcls + '">' + e.verdict + '</span>' +
+      '</div>' +
+      '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; $' + e.netHr.toFixed(0) + '/hr</div>' +
+      threshold +
+      '<button class="' + btnCls + '" onclick="toggleAccept(' + i + ')">' + btnTxt + '</button>' +
+    '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function toggleAccept(i) {
+  offerLog[i].accepted = !offerLog[i].accepted;
+  saveOfferLog();
+  updateLogBadge();
+  renderLog();
+}
+
+function adjustShiftHrs(delta) {
+  var el = document.getElementById('shiftHrsWorked');
+  var val = parseFloat(el.value) || 0;
+  val = Math.max(0, Math.min(16, Math.round((val + delta) * 2) / 2));
+  el.value = val;
+  renderExportSummary();
+}
+
+function renderExportSummary() {
+  var pings    = offerLog.filter(function(e) { return !e.fcfs; }).length;
+  var accepted = offerLog.filter(function(e) { return e.accepted; }).length;
+  var total    = offerLog.length;
+  document.getElementById('lsTotal2').textContent    = pings;
+  document.getElementById('lsAccepted2').textContent = accepted;
+  document.getElementById('lsDeclined2').textContent = total - accepted;
+  var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
+  var oph = hrs > 0 ? (pings / hrs).toFixed(1) : '--';
+  document.getElementById('offersPerHr').textContent = oph;
+}
+
+function exportCSV() {
+  if (!offerLog.length) {
+    alert('No offers logged today yet.');
+    return;
+  }
+  var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
+  var total    = offerLog.length;
+  var accepted = offerLog.filter(function(e) { return e.accepted; }).length;
+  var now = new Date();
+  var dateStr = now.getFullYear() + '-' + (now.getMonth()+1) + '-' + now.getDate();
+
+  // Summary row at top
+  var summary = '# Date,' + dateStr + ',Hours Worked,' + hrs + ',Offers,' + total + ',Accepted,' + accepted + ',Declined,' + (total - accepted);
+  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Accepts At','Travel Miles'];
+  var rows = offerLog.map(function(e) {
+    return [
+      e.date, e.time, e.platform, e.orderType,
+      e.pay.toFixed(2), e.miles.toFixed(1), e.estMin,
+      e.ppm.toFixed(2), e.net.toFixed(2), e.netHr.toFixed(0),
+      e.verdict, e.fcfs ? 'YES' : 'NO',
+      e.accepted ? 'YES' : 'NO',
+      e.acceptAt ? e.acceptAt.toFixed(2) : '',
+      e.travelMiles || 0
+    ].join(',');
+  });
+
+  var csv = summary + '\n' + headers.join(',') + '\n' + rows.join('\n');
+  var blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.setAttribute('download', 'offers_' + dateStr + '.csv');
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
 }
 
 function analyze() {
@@ -994,7 +1306,7 @@ function analyze() {
   var net        = pay - gasCost;
   var netHrRate  = realisticMin > 0 ? (net / (realisticMin / 60)) : 0;
 
-  var minFare  = isDDUE ? (miles <= 2 ? 8 : 10) : isCR ? 10 : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
+  var minFare  = isDDUE ? 8 : isCR ? 10 : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
   var ppmFloor = isDDUE ? 2.0 : 2.5;
   var passMin  = (pay >= minFare);
   var passPPM  = (ppm >= ppmFloor);
@@ -1085,21 +1397,35 @@ function analyze() {
   res.classList.add('visible');
   res.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-  hist.unshift({
-    pay: pay, miles: miles, travelMiles: travelMiles, ppm: ppm, net: net,
-    netHrRate: netHrRate, estMin: estMin, realisticMin: realisticMin,
-    verdict: vClass, platform: platform, gasUsed: gas,
+  // Save to offer log
+  var now = new Date();
+  var orderType = platform;
+  offerLog.push({
+    date: now.toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}),
+    time: now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+    platform: platform,
+    orderType: orderType,
+    pay: pay,
+    miles: miles,
+    estMin: estMin,
+    ppm: ppm,
+    net: net,
+    netHr: netHrRate,
+    verdict: vWord,
+    fcfs: isFCFS,
+    accepted: vClass === 'accept',
     acceptAt: showThresh ? acceptAt : null,
-    time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+    travelMiles: travelMiles
   });
-  if (hist.length > 10) hist = hist.slice(0, 10);
-  try { localStorage.setItem('rch', JSON.stringify(hist)); } catch(e) {}
-  renderHistory();
+  saveOfferLog();
+  updateLogBadge();
 
   document.getElementById('inPay').value = '';
   document.getElementById('inMiles').value = '';
   document.getElementById('inTime').value = '';
   document.getElementById('inTime').style.color = '';
+
+  resetFCFS();
 
   resetStore();
 }
@@ -1164,25 +1490,31 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyz
     // New day -- clear run history, pace earned, pace hours (keep target and gas)
     try {
       var oldPace = JSON.parse(localStorage.getItem('rch_pace') || '{}');
-      var newPace = { t: oldPace.t || 150, h: 7, e: 0 };
+      var newPace = { t: oldPace.t || 125, h: 7, e: 0 };
       localStorage.setItem('rch_pace', JSON.stringify(newPace));
       localStorage.removeItem('rch');
+      localStorage.removeItem('rch_log');
       localStorage.setItem('rch_date', todayStr);
     } catch(x) {}
     hist = [];
+    offerLog = [];
     paceEarned = 0;
     paceHrs = 7;
   }
 })();
 
 syncGasBadge();
-renderHistory();
+updateLogBadge();
 
 // Load saved pace
 try {
   var sp = JSON.parse(localStorage.getItem('rch_pace') || '{}');
-  if (sp.t) { paceTarget = sp.t; document.getElementById('paceTargetIn').value = sp.t; }
-  if (sp.h) { paceHrs = sp.h;   document.getElementById('paceHrsIn').value = sp.h; }
+  // Reset old $150 default to new $125 default
+  var savedTarget = sp.t || 125;
+  if (savedTarget === 150) savedTarget = 125;
+  paceTarget = savedTarget;
+  document.getElementById('paceTargetIn').value = savedTarget;
+  if (sp.h) { paceHrs = sp.h; document.getElementById('paceHrsIn').value = sp.h; }
   if (sp.e) { paceEarned = sp.e; }
 } catch(x) {}
 updatePace();
