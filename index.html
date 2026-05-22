@@ -403,13 +403,73 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 .log-entry-meta { font-size: 11px; color: var(--muted); line-height: 1.6; }
 .log-entry-threshold { font-size: 11px; color: var(--amber); margin-top: 3px; }
 .log-accept-btn {
-  width: 100%; margin-top: 8px;
+  flex: 1;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; color: var(--muted); font-family: var(--mono);
   font-size: 11px; padding: 7px; cursor: pointer; transition: all .15s;
   text-align: center;
 }
 .log-accept-btn.on { background: var(--green-dim); border-color: var(--green); color: var(--green); font-weight: bold; }
+.log-edit-btn {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--blue); font-family: var(--mono);
+  font-size: 11px; padding: 7px 14px; cursor: pointer; transition: all .15s;
+  white-space: nowrap;
+}
+.log-btn-row { display: flex; gap: 6px; margin-top: 8px; }
+
+/* Edit modal */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.75); z-index: 100;
+  display: none; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 16px; padding: 20px; width: 100%; max-width: 380px;
+  max-height: 90vh; overflow-y: auto;
+}
+.modal-title {
+  font-family: var(--mono); font-size: 14px; color: var(--blue);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.modal-close {
+  background: none; border: none; color: var(--muted);
+  font-size: 22px; cursor: pointer; padding: 0; line-height: 1;
+}
+.modal-meta {
+  font-size: 11px; color: var(--muted); margin-bottom: 16px;
+  padding-bottom: 14px; border-bottom: 1px solid var(--border);
+}
+.modal-field { margin-bottom: 14px; }
+.modal-field label {
+  display: block; font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px;
+}
+.modal-field input, .modal-field select {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; color: var(--text); font-family: var(--mono);
+  font-size: 20px; font-weight: bold; padding: 10px 12px; outline: none;
+  -webkit-appearance: none; appearance: none;
+}
+.modal-field select { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+.modal-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
+.modal-btn {
+  border: none; border-radius: 10px;
+  font-family: var(--mono); font-size: 13px; font-weight: bold;
+  padding: 12px; cursor: pointer; transition: opacity .1s;
+}
+.modal-btn:active { opacity: 0.8; }
+.modal-btn-save { background: var(--green); color: #000; }
+.modal-btn-cancel { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+.modal-btn-delete {
+  grid-column: 1 / -1; background: transparent; color: var(--red);
+  border: 1px solid var(--red); margin-top: 4px;
+}
+.modal-btn-delete.confirm { background: var(--red); color: #000; }
 
 /* FCFS toggle row */
 .fcfs-row {
@@ -760,6 +820,40 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 </div>
 
 <div class="spacer"></div>
+
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <div class="modal-title">
+      <span>Edit Offer</span>
+      <button class="modal-close" onclick="closeEditModal()">&times;</button>
+    </div>
+    <div class="modal-meta" id="editModalMeta"></div>
+    <div class="modal-field">
+      <label>Pay Offered ($)</label>
+      <input type="number" inputmode="decimal" id="editPay" step="0.01" min="0">
+    </div>
+    <div class="modal-field">
+      <label>Miles</label>
+      <input type="number" inputmode="decimal" id="editMiles" step="0.1" min="0">
+    </div>
+    <div class="modal-field">
+      <label>Platform / Order Type</label>
+      <select id="editPlatform">
+        <option value="Spark Shop">Spark Shop</option>
+        <option value="Curbside">Curbside</option>
+        <option value="Pharmacy">Pharmacy</option>
+        <option value="Customer Return">Customer Return</option>
+        <option value="DD/UE">DD / UE</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="modal-btn-row">
+      <button class="modal-btn modal-btn-cancel" onclick="closeEditModal()">Cancel</button>
+      <button class="modal-btn modal-btn-save" onclick="saveEdit()">Save</button>
+      <button class="modal-btn modal-btn-delete" id="deleteBtn" onclick="deleteEntry()">Delete Entry</button>
+    </div>
+  </div>
+</div>
 
 <script>
 var gas = 0.224;
@@ -1197,7 +1291,10 @@ function renderLog() {
       '</div>' +
       '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; $' + e.netHr.toFixed(0) + '/hr</div>' +
       threshold +
-      '<button class="' + btnCls + '" onclick="toggleAccept(' + i + ')">' + btnTxt + '</button>' +
+      '<div class="log-btn-row">' +
+        '<button class="' + btnCls + '" onclick="toggleAccept(' + i + ')">' + btnTxt + '</button>' +
+        '<button class="log-edit-btn" onclick="openEditModal(' + i + ')">Edit</button>' +
+      '</div>' +
     '</div>';
   });
   el.innerHTML = html;
@@ -1269,6 +1366,107 @@ function exportCSV() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }, 100);
+}
+
+var editIndex = -1;
+var deleteConfirmPending = false;
+
+function openEditModal(i) {
+  editIndex = i;
+  deleteConfirmPending = false;
+  var e = offerLog[i];
+  document.getElementById('editPay').value      = e.pay.toFixed(2);
+  document.getElementById('editMiles').value    = e.miles.toFixed(1);
+  document.getElementById('editPlatform').value = e.platform;
+  document.getElementById('editModalMeta').textContent = e.date + '  -  ' + e.time + (e.fcfs ? '  -  FCFS' : '  -  Ping');
+  var dBtn = document.getElementById('deleteBtn');
+  dBtn.textContent = 'Delete Entry';
+  dBtn.classList.remove('confirm');
+  document.getElementById('editModal').classList.add('open');
+}
+
+function closeEditModal() {
+  document.getElementById('editModal').classList.remove('open');
+  editIndex = -1;
+  deleteConfirmPending = false;
+}
+
+function saveEdit() {
+  if (editIndex < 0) return;
+  var newPay      = parseFloat(document.getElementById('editPay').value);
+  var newMiles    = parseFloat(document.getElementById('editMiles').value);
+  var newPlatform = document.getElementById('editPlatform').value;
+  if (!newPay || !newMiles || newPay <= 0 || newMiles <= 0) {
+    alert('Pay and miles must be greater than zero.');
+    return;
+  }
+  var e = offerLog[editIndex];
+
+  // Recalculate everything based on new values
+  var isDDUE  = (newPlatform === 'DD/UE');
+  var isPharm = (newPlatform === 'Pharmacy');
+  var isCR    = (newPlatform === 'Customer Return');
+
+  // Reuse stored estMin if it exists, otherwise re-estimate
+  var estMin = e.estMin || (isDDUE ? getDDUETime(newMiles) : 30);
+  var buffer = isDDUE ? 0 : getTimeBuffer(estMin);
+  var realisticMin = estMin + buffer;
+
+  var travelMi = e.travelMiles || 0;
+  var totalMi  = newMiles + travelMi;
+  var ppm      = newPay / totalMi;
+  var gasCost  = (newMiles * gas * 2) + (travelMi * gas);
+  var net      = newPay - gasCost;
+  var netHr    = realisticMin > 0 ? (net / (realisticMin / 60)) : 0;
+
+  var minFare  = isDDUE ? 8 : isCR ? 10 : isPharm ? getPharmMinFare(newMiles) : getMinFare(newMiles);
+  var ppmFloor = isDDUE ? 2.0 : 2.5;
+  var passMin  = (newPay >= minFare);
+  var passPPM  = (ppm >= ppmFloor);
+  var timeRisk = !isDDUE && estMin >= 75;
+
+  var ppmTarget = ppmFloor * totalMi;
+  var acceptAt  = Math.ceil(Math.max(minFare, ppmTarget) * 100) / 100;
+
+  var vWord, showThresh = false;
+  if (timeRisk)                   { vWord = 'DECLINE'; }
+  else if (passMin && passPPM)    { vWord = 'ACCEPT'; }
+  else if (!passMin && !passPPM)  { vWord = 'DECLINE'; showThresh = true; }
+  else if (!passMin)              { vWord = 'DECLINE'; showThresh = true; }
+  else                            { vWord = 'MARGINAL'; showThresh = true; }
+
+  // Update entry
+  e.pay        = newPay;
+  e.miles      = newMiles;
+  e.platform   = newPlatform;
+  e.orderType  = newPlatform;
+  e.estMin     = estMin;
+  e.ppm        = ppm;
+  e.net        = net;
+  e.netHr      = netHr;
+  e.verdict    = vWord;
+  e.acceptAt   = showThresh ? acceptAt : null;
+
+  saveOfferLog();
+  updateLogBadge();
+  renderLog();
+  closeEditModal();
+}
+
+function deleteEntry() {
+  if (editIndex < 0) return;
+  var dBtn = document.getElementById('deleteBtn');
+  if (!deleteConfirmPending) {
+    deleteConfirmPending = true;
+    dBtn.textContent = 'Tap again to confirm delete';
+    dBtn.classList.add('confirm');
+    return;
+  }
+  offerLog.splice(editIndex, 1);
+  saveOfferLog();
+  updateLogBadge();
+  renderLog();
+  closeEditModal();
 }
 
 function analyze() {
