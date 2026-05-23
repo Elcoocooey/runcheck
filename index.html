@@ -15,7 +15,7 @@
   --border:#252525;
   --border2:#2e2e2e;
   --text:#f0f0f0;
-  --muted:#888;
+  --muted:#b0b0b0;
   --muted2:#555;
   --green:#00e87a;
   --green-dim:rgba(0,232,122,0.10);
@@ -509,6 +509,14 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 .log-sum-box { background: var(--surface2); border-radius: 8px; padding: 8px; text-align: center; }
 .log-sum-val { font-size: 18px; font-weight: bold; }
 .log-sum-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+
+/* Export day toggle */
+.export-day-btn {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; color: var(--muted); font-family: var(--mono);
+  font-size: 11px; padding: 8px; cursor: pointer; transition: all .15s;
+}
+.export-day-btn.active { background: var(--blue); border-color: var(--blue); color: #000; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -593,6 +601,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 <div class="log-panel" id="logPanel">
   <div class="log-tabs">
     <button class="log-tab active" onclick="switchLogTab('today')">Today's Log</button>
+    <button class="log-tab" onclick="switchLogTab('prev')">Prev Log</button>
     <button class="log-tab" onclick="switchLogTab('export')">Export</button>
   </div>
   <div class="log-pane active" id="lpane-today">
@@ -603,14 +612,27 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     </div>
     <div id="logList"><div class="empty">No offers logged today</div></div>
   </div>
+  <div class="log-pane" id="lpane-prev">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px;text-align:center;" id="prevDateLabel">no previous log saved</div>
+    <div class="log-summary">
+      <div class="log-sum-box"><div class="log-sum-val" id="lsPrevTotal" style="color:var(--blue);">0</div><div class="log-sum-lbl">pings</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="lsPrevAccepted" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="lsPrevFCFS" style="color:var(--amber);">0</div><div class="log-sum-lbl">from FCFS</div></div>
+    </div>
+    <div id="prevLogList"><div class="empty">No previous log saved yet</div></div>
+  </div>
   <div class="log-pane" id="lpane-export">
+    <div style="display:flex;gap:6px;margin-bottom:12px;">
+      <button id="expSelToday" class="export-day-btn active" onclick="switchExportDay('today')">Today</button>
+      <button id="expSelPrev" class="export-day-btn" onclick="switchExportDay('prev')">Previous Day</button>
+    </div>
     <div class="log-summary">
       <div class="log-sum-box"><div class="log-sum-val" id="lsTotal2" style="color:var(--blue);">0</div><div class="log-sum-lbl">pings</div></div>
       <div class="log-sum-box"><div class="log-sum-val" id="lsAccepted2" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
       <div class="log-sum-box"><div class="log-sum-val" id="lsDeclined2" style="color:var(--red);">0</div><div class="log-sum-lbl">not accepted</div></div>
     </div>
     <div style="background:var(--surface2);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
-      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">Hours Worked Today</div>
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;" id="hrsLabel">Hours Worked Today</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <button onclick="adjustShiftHrs(-0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">-</button>
         <input type="number" inputmode="decimal" id="shiftHrsWorked" value="0" min="0" max="16" step="0.5"
@@ -619,8 +641,8 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       </div>
       <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">hrs &nbsp;&middot;&nbsp; <span id="offersPerHr">--</span> offers/hr</div>
     </div>
-    <button class="export-btn" onclick="exportCSV()">DOWNLOAD TODAY'S CSV</button>
-    <div class="export-info">Downloads a CSV of all offers checked today including hours worked.<br>Add to your weekly offer tracking workbook.</div>
+    <button class="export-btn" id="exportBtn" onclick="exportCSV()">DOWNLOAD TODAY'S CSV</button>
+    <div class="export-info">Downloads a CSV of all offers checked including hours worked.<br>Add to your weekly offer tracking workbook.</div>
   </div>
 </div>
 
@@ -645,9 +667,9 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 <div class="platform-row">
   <button class="platform-btn active" onclick="setPlatform(this,'Spark Shop')">Spark Shop</button>
   <button class="platform-btn" onclick="setPlatform(this,'Curbside')">Curbside</button>
+  <button class="platform-btn" onclick="setPlatform(this,'DD/UE')">DD / UE</button>
   <button class="platform-btn" onclick="setPlatform(this,'Pharmacy')">Pharmacy</button>
   <button class="platform-btn" onclick="setPlatform(this,'Customer Return')">Return</button>
-  <button class="platform-btn" onclick="setPlatform(this,'DD/UE')">DD / UE</button>
   <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
 </div>
 
@@ -667,6 +689,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <button class="store-btn" onclick="selectStore(this,'4336',3.2)">4336 &nbsp;3.2mi</button>
       <button class="store-btn" onclick="selectStore(this,'5429',6.4)">5429 &nbsp;6.4mi</button>
       <button class="store-btn" onclick="selectStore(this,'4955',3.7)">4955 &nbsp;3.7mi</button>
+      <button class="store-btn" onclick="selectStore(this,'nearby',1.5)">Nearby &nbsp;~1.5mi</button>
     </div>
     <div id="travelNote" style="display:none;font-size:11px;color:var(--amber);"></div>
   </div>
@@ -862,6 +885,9 @@ var platform = 'Spark Shop';
 var hist = [];
 var fillups = [];
 var offerLog = [];
+var prevLog = [];
+var prevDate = '';
+var exportDay = 'today';
 var travelMiles = 0;
 var isHomeStore = true;
 var selectedStore = null;
@@ -874,6 +900,8 @@ var paceEditOpen = false;
 try { hist = JSON.parse(localStorage.getItem('rch') || '[]'); } catch(e) { hist = []; }
 try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch(e) { fillups = []; }
 try { offerLog = JSON.parse(localStorage.getItem('rch_log') || '[]'); } catch(e) { offerLog = []; }
+try { prevLog = JSON.parse(localStorage.getItem('rch_log_prev') || '[]'); } catch(e) { prevLog = []; }
+try { prevDate = localStorage.getItem('rch_log_prev_date') || ''; } catch(e) { prevDate = ''; }
 
 if (fillups.length > 0) {
   gas = fillups[0].cpm;
@@ -1244,12 +1272,25 @@ function toggleGasPanel() {
 
 function switchLogTab(name) {
   document.querySelectorAll('.log-tab').forEach(function(t,i) {
-    var names = ['today','export'];
+    var names = ['today','prev','export'];
     t.classList.toggle('active', names[i] === name);
   });
   document.querySelectorAll('.log-pane').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('lpane-' + name).classList.add('active');
   if (name === 'export') renderExportSummary();
+  if (name === 'prev')   renderPrevLog();
+}
+
+function switchExportDay(day) {
+  exportDay = day;
+  document.getElementById('expSelToday').classList.toggle('active', day === 'today');
+  document.getElementById('expSelPrev').classList.toggle('active', day === 'prev');
+  document.getElementById('hrsLabel').textContent = day === 'today' ? 'Hours Worked Today' : 'Hours Worked (' + (prevDate || 'previous') + ')';
+  document.getElementById('exportBtn').textContent = day === 'today' ? "DOWNLOAD TODAY'S CSV" : 'DOWNLOAD PREV DAY CSV';
+  // Reset hours when switching to prev (default 7)
+  if (day === 'prev') document.getElementById('shiftHrsWorked').value = 7;
+  else document.getElementById('shiftHrsWorked').value = 0;
+  renderExportSummary();
 }
 
 function saveOfferLog() {
@@ -1273,7 +1314,9 @@ function renderLog() {
   document.getElementById('lsFCFS').textContent     = fcfs;
   if (!offerLog.length) { el.innerHTML = '<div class="empty">No offers logged today</div>'; return; }
   var html = '';
-  offerLog.forEach(function(e, i) {
+  // Reverse iteration -- most recent first
+  for (var idx = offerLog.length - 1; idx >= 0; idx--) {
+    var e = offerLog[idx];
     var vcls = e.verdict === 'ACCEPT' ? 'le-accept' : e.verdict === 'MARGINAL' ? 'le-marginal' : 'le-decline';
     var entryCls = 'log-entry' + (e.accepted ? ' accepted' : '') + (e.fcfs ? ' fcfs' : '');
     var fcfsBadge = e.fcfs ? ' &nbsp;<span style="color:var(--amber);font-size:9px;font-weight:bold;">FCFS</span>' : '';
@@ -1292,11 +1335,50 @@ function renderLog() {
       '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; $' + e.netHr.toFixed(0) + '/hr</div>' +
       threshold +
       '<div class="log-btn-row">' +
-        '<button class="' + btnCls + '" onclick="toggleAccept(' + i + ')">' + btnTxt + '</button>' +
-        '<button class="log-edit-btn" onclick="openEditModal(' + i + ')">Edit</button>' +
+        '<button class="' + btnCls + '" onclick="toggleAccept(' + idx + ')">' + btnTxt + '</button>' +
+        '<button class="log-edit-btn" onclick="openEditModal(' + idx + ')">Edit</button>' +
       '</div>' +
     '</div>';
-  });
+  }
+  el.innerHTML = html;
+}
+
+function renderPrevLog() {
+  var el = document.getElementById('prevLogList');
+  var lbl = document.getElementById('prevDateLabel');
+  var pings    = prevLog.filter(function(e) { return !e.fcfs; }).length;
+  var accepted = prevLog.filter(function(e) { return e.accepted; }).length;
+  var fcfs     = prevLog.filter(function(e) { return e.fcfs; }).length;
+  document.getElementById('lsPrevTotal').textContent    = pings;
+  document.getElementById('lsPrevAccepted').textContent = accepted;
+  document.getElementById('lsPrevFCFS').textContent     = fcfs;
+  if (!prevLog.length) {
+    lbl.textContent = 'no previous log saved yet';
+    el.innerHTML = '<div class="empty">No previous log saved yet</div>';
+    return;
+  }
+  lbl.textContent = prevDate ? 'showing log from ' + prevDate : 'previous day log';
+  var html = '';
+  for (var idx = prevLog.length - 1; idx >= 0; idx--) {
+    var e = prevLog[idx];
+    var vcls = e.verdict === 'ACCEPT' ? 'le-accept' : e.verdict === 'MARGINAL' ? 'le-marginal' : 'le-decline';
+    var entryCls = 'log-entry' + (e.accepted ? ' accepted' : '') + (e.fcfs ? ' fcfs' : '');
+    var fcfsBadge = e.fcfs ? ' &nbsp;<span style="color:var(--amber);font-size:9px;font-weight:bold;">FCFS</span>' : '';
+    var threshold = (!e.accepted && e.acceptAt) ? '<div class="log-entry-threshold">accepts at $' + e.acceptAt.toFixed(2) + '+</div>' : '';
+    html += '<div class="' + entryCls + '">' +
+      '<div class="log-entry-top">' +
+        '<div>' +
+          '<span class="log-entry-pay">$' + e.pay.toFixed(2) + '</span>' +
+          '<span style="font-size:11px;color:var(--muted);"> &nbsp;' + e.miles.toFixed(1) + 'mi</span>' +
+          fcfsBadge +
+          (e.accepted ? ' &nbsp;<span style="color:var(--green);font-size:9px;font-weight:bold;">ACCEPTED</span>' : '') +
+        '</div>' +
+        '<span class="log-entry-verdict ' + vcls + '">' + e.verdict + '</span>' +
+      '</div>' +
+      '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; $' + e.netHr.toFixed(0) + '/hr</div>' +
+      threshold +
+    '</div>';
+  }
   el.innerHTML = html;
 }
 
@@ -1315,10 +1397,13 @@ function adjustShiftHrs(delta) {
   renderExportSummary();
 }
 
+function getActiveLog() { return exportDay === 'prev' ? prevLog : offerLog; }
+
 function renderExportSummary() {
-  var pings    = offerLog.filter(function(e) { return !e.fcfs; }).length;
-  var accepted = offerLog.filter(function(e) { return e.accepted; }).length;
-  var total    = offerLog.length;
+  var src = getActiveLog();
+  var pings    = src.filter(function(e) { return !e.fcfs; }).length;
+  var accepted = src.filter(function(e) { return e.accepted; }).length;
+  var total    = src.length;
   document.getElementById('lsTotal2').textContent    = pings;
   document.getElementById('lsAccepted2').textContent = accepted;
   document.getElementById('lsDeclined2').textContent = total - accepted;
@@ -1328,20 +1413,26 @@ function renderExportSummary() {
 }
 
 function exportCSV() {
-  if (!offerLog.length) {
-    alert('No offers logged today yet.');
+  var src = getActiveLog();
+  if (!src.length) {
+    alert(exportDay === 'prev' ? 'No previous day log saved.' : 'No offers logged today yet.');
     return;
   }
   var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
-  var total    = offerLog.length;
-  var accepted = offerLog.filter(function(e) { return e.accepted; }).length;
+  var total    = src.length;
+  var accepted = src.filter(function(e) { return e.accepted; }).length;
   var now = new Date();
-  var dateStr = now.getFullYear() + '-' + (now.getMonth()+1) + '-' + now.getDate();
+  var dateStr;
+  if (exportDay === 'prev' && prevDate) {
+    dateStr = prevDate;
+  } else {
+    dateStr = now.getFullYear() + '-' + (now.getMonth()+1) + '-' + now.getDate();
+  }
 
   // Summary row at top
   var summary = '# Date,' + dateStr + ',Hours Worked,' + hrs + ',Offers,' + total + ',Accepted,' + accepted + ',Declined,' + (total - accepted);
   var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Accepts At','Travel Miles'];
-  var rows = offerLog.map(function(e) {
+  var rows = src.map(function(e) {
     return [
       e.date, e.time, e.platform, e.orderType,
       e.pay.toFixed(2), e.miles.toFixed(1), e.estMin,
@@ -1685,8 +1776,15 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyz
   try { lastDate = localStorage.getItem('rch_date') || ''; } catch(x) {}
 
   if (lastDate !== todayStr) {
-    // New day -- clear run history, pace earned, pace hours (keep target and gas)
+    // New day -- rotate today's log to prev, clear today
     try {
+      // Save current log as previous before clearing
+      if (offerLog.length > 0 && lastDate) {
+        localStorage.setItem('rch_log_prev', JSON.stringify(offerLog));
+        localStorage.setItem('rch_log_prev_date', lastDate);
+        prevLog = offerLog.slice();
+        prevDate = lastDate;
+      }
       var oldPace = JSON.parse(localStorage.getItem('rch_pace') || '{}');
       var newPace = { t: oldPace.t || 125, h: 7, e: 0 };
       localStorage.setItem('rch_pace', JSON.stringify(newPace));
