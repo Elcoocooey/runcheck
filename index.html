@@ -211,25 +211,22 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 
 .platform-row {
   padding: 0 20px 2px;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
-.platform-row::-webkit-scrollbar { display: none; }
 .platform-btn {
-  flex-shrink: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 100px;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
-  padding: 8px 15px;
+  padding: 8px 8px;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
+  text-align: center;
 }
 .platform-btn.active { background: var(--green-dim); border-color: var(--green); color: var(--green); }
 
@@ -683,6 +680,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <button class="platform-btn" onclick="setPlatform(this,'Curbside')">Curbside</button>
   <button class="platform-btn" onclick="setPlatform(this,'DD/UE')">DD / UE</button>
   <button class="platform-btn" onclick="setPlatform(this,'Pharmacy')">Pharmacy</button>
+  <button class="platform-btn" onclick="setPlatform(this,'Shop+Pharmacy')">Shop+Pharm</button>
   <button class="platform-btn" onclick="setPlatform(this,'Customer Return')">Return</button>
   <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
 </div>
@@ -858,6 +856,16 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     </div>
     <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
       <div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Shop+Pharmacy</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">$14 floor, scales with items &nbsp;&middot;&nbsp; no time pad (runs under est)</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="rule-min">$14+</div>
+        <div class="rule-ppm">&gt;$2.50/mi</div>
+      </div>
+    </div>
+    <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
+      <div>
         <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">DD / UE &mdash; filler only</div>
         <div style="font-size:11px;color:var(--muted);margin-top:3px;">accepts as FILLER: &ge;$20/hr &nbsp;&middot;&nbsp; &le;25min &nbsp;&middot;&nbsp; &ge;$2.00/mi</div>
       </div>
@@ -906,6 +914,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
         <option value="Spark Shop">Spark Shop</option>
         <option value="Curbside">Curbside</option>
         <option value="Pharmacy">Pharmacy</option>
+        <option value="Shop+Pharmacy">Shop+Pharmacy</option>
         <option value="Customer Return">Customer Return</option>
         <option value="DD/UE">DD / UE</option>
         <option value="Other">Other</option>
@@ -1140,7 +1149,7 @@ function setPlatform(btn, name) {
   document.getElementById('inTime').value = '';
   document.getElementById('inTime').style.color = '';
   // Show stops/items only for Shop and Curbside
-  var showStopsItems = (name === 'Spark Shop' || name === 'Curbside');
+  var showStopsItems = (name === 'Spark Shop' || name === 'Curbside' || name === 'Shop+Pharmacy');
   document.getElementById('stopsItemsRow').style.display = showStopsItems ? 'block' : 'none';
   if (!showStopsItems) {
     document.getElementById('inStops').value = '';
@@ -1194,21 +1203,42 @@ function getDDUETime(miles) {
   return 31;
 }
 
-function getTimeBuffer(estMin) {
-  if (estMin < 20)  return 4;
-  if (estMin < 30)  return 1;
-  if (estMin < 45)  return 2;
-  if (estMin < 60)  return 7;
-  if (estMin < 75)  return 18;
-  return 25;
+// Tiered length-based buffer (used for Curbside, and as Shop fallback when items unknown)
+function getTieredBuffer(estMin) {
+  if (estMin < 35) return 2;
+  if (estMin < 45) return 4;
+  if (estMin < 60) return 9;
+  return 12;
 }
 
-// Returns the time (min) to use for net/hr. Applies long-run penalty for honest hourly rate.
+// Order-type and item-aware buffer.
+// Shop: item-aware (0.4 min/item) when item count known, else tiered fallback.
+// Curbside: tiered length-based.
+// Shop+Pharmacy: no buffer (runs under estimate -- do not pad).
+// Pharmacy: modest fixed buffer.
+// DD/UE: 0 (already uses actual-time averages).
+function getTimeBuffer(estMin, platform, items) {
+  if (platform === 'DD/UE') return 0;
+  if (platform === 'Shop+Pharmacy') return 0;   // runs under estimate -- do not pad (retune later)
+  if (platform === 'Pharmacy') return 3;
+  if (platform === 'Customer Return' || platform === 'Other') return getTieredBuffer(estMin);
+  if (platform === 'Spark Shop') {
+    if (!isNaN(items) && items > 0) {
+      return Math.round(0.4 * items);   // item-aware: ~24 sec/item
+    }
+    return getTieredBuffer(estMin);      // fallback when item count unknown
+  }
+  if (platform === 'Curbside') return getTieredBuffer(estMin);
+  return getTieredBuffer(estMin);
+}
+
+// Returns the time (min) for net/hr. Penalty checks BUFFERED time (Finding 4: buffer first, then penalty).
 function getNetHrMinutes(estMin, buffer, isDDUE) {
-  if (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN) {
+  var bufferedMin = estMin + buffer;
+  if (!isDDUE && bufferedMin > LONGRUN_THRESHOLD_MIN) {
     return LONGRUN_PENALTY_MIN;  // long-run trap: assume realistic 120 min
   }
-  return estMin + buffer;
+  return bufferedMin;
 }
 
 // Flags a likely capture glitch: implied speed too high for the platform.
@@ -1577,7 +1607,7 @@ function openEditModal(i) {
 
 function onEditPlatformChange() {
   var p = document.getElementById('editPlatform').value;
-  var show = (p === 'Spark Shop' || p === 'Curbside');
+  var show = (p === 'Spark Shop' || p === 'Curbside' || p === 'Shop+Pharmacy');
   document.getElementById('editStopsItemsWrap').style.display = show ? 'grid' : 'none';
 }
 
@@ -1610,7 +1640,8 @@ function saveEdit() {
   var estMin = (!isNaN(newTimeRaw) && newTimeRaw > 0)
     ? newTimeRaw
     : (isDDUE ? getDDUETime(newMiles) : 30);
-  var buffer = isDDUE ? 0 : getTimeBuffer(estMin);
+  var itemsForBuffer = (newPlatform === 'Spark Shop' && !isNaN(newItemsRaw)) ? newItemsRaw : NaN;
+  var buffer = getTimeBuffer(estMin, newPlatform, itemsForBuffer);
   var netHrMin = getNetHrMinutes(estMin, buffer, isDDUE);
 
   var travelMi = e.travelMiles || 0;
@@ -1620,7 +1651,8 @@ function saveEdit() {
   var net      = newPay - gasCost;
   var netHr    = netHrMin > 0 ? (net / (netHrMin / 60)) : 0;
 
-  var minFare  = isDDUE ? 0 : isCR ? 10 : isPharm ? getPharmMinFare(newMiles) : getMinFare(newMiles);
+  var isSP     = (newPlatform === 'Shop+Pharmacy');
+  var minFare  = isDDUE ? 0 : isCR ? 10 : isSP ? 14 : isPharm ? getPharmMinFare(newMiles) : getMinFare(newMiles);
   var ppmFloor = isDDUE ? 2.0 : 2.5;
   var passMin  = (newPay >= minFare);
   var passPPM  = (ppm >= ppmFloor);
@@ -1654,8 +1686,8 @@ function saveEdit() {
   e.netHr      = netHr;
   e.verdict    = vWord;
   e.acceptAt   = showThresh ? acceptAt : null;
-  // Stops/items only apply to Shop and Curbside
-  if (newPlatform === 'Spark Shop' || newPlatform === 'Curbside') {
+  // Stops/items only apply to Shop, Curbside, and Shop+Pharmacy
+  if (newPlatform === 'Spark Shop' || newPlatform === 'Curbside' || newPlatform === 'Shop+Pharmacy') {
     e.stops = isNaN(newStopsRaw) ? '' : newStopsRaw;
     e.items = isNaN(newItemsRaw) ? '' : newItemsRaw;
   } else {
@@ -1708,14 +1740,18 @@ function analyze() {
     ? (isDDUE ? getDDUETime(miles) : 30)
     : estRaw;
 
-  // Apply buffer for Spark (not DD/UE which already uses avg actual)
-  var buffer    = isDDUE ? 0 : getTimeBuffer(estMin);
+  // Item count for Shop buffer (only Spark Shop uses item-aware buffer)
+  var itemsRaw = parseInt(document.getElementById('inItems').value, 10);
+  var itemsForBuffer = (platform === 'Spark Shop' && !isNaN(itemsRaw)) ? itemsRaw : NaN;
+
+  // Apply order-type / item-aware buffer
+  var buffer    = getTimeBuffer(estMin, platform, itemsForBuffer);
   var realisticMin = estMin + buffer;
 
-  // Net/hr time applies long-run penalty (Spark only, est > 70 -> 120 min)
+  // Net/hr time applies long-run penalty on BUFFERED time (Spark only)
   var netHrMin   = getNetHrMinutes(estMin, buffer, isDDUE);
 
-  // Hard flag for 75+ min runs (Spark)
+  // Hard flag for 75+ min runs (Spark) -- still on raw est (verdict rule, phase 3)
   var timeRisk = !isDDUE && estMin >= 75;
 
   // Bad est time capture-glitch flag
@@ -1727,7 +1763,8 @@ function analyze() {
   var net        = pay - gasCost;
   var netHrRate  = netHrMin > 0 ? (net / (netHrMin / 60)) : 0;
 
-  var minFare  = isDDUE ? 0 : isCR ? 10 : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
+  var isSP    = (platform === 'Shop+Pharmacy');
+  var minFare  = isDDUE ? 0 : isCR ? 10 : isSP ? 14 : isPharm ? getPharmMinFare(miles) : getMinFare(miles);
   var ppmFloor = isDDUE ? 2.0 : 2.5;
   var passMin  = (pay >= minFare);
   var passPPM  = (ppm >= ppmFloor);
@@ -1803,10 +1840,20 @@ function analyze() {
   var hrEl = document.getElementById('sHrRate');
   hrEl.textContent = '$' + netHrRate.toFixed(0) + '/hr';
   hrEl.className = 'stat-value ' + (netHrRate >= 30 ? 'green' : netHrRate >= 22 ? 'amber' : 'red');
-  var penalized = (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN);
-  var bufNote = penalized
-    ? 'est ' + estMin + 'min -> ' + LONGRUN_PENALTY_MIN + 'min penalty'
-    : buffer > 0 ? 'est ' + estMin + '+' + buffer + 'min buffer' : 'est ' + estMin + 'min (actual avg)';
+  var penalized = (!isDDUE && (estMin + buffer) > LONGRUN_THRESHOLD_MIN);
+  var itemBuf = (platform === 'Spark Shop' && !isNaN(itemsForBuffer) && itemsForBuffer > 0);
+  var bufNote;
+  if (penalized) {
+    bufNote = 'est ' + estMin + '+' + buffer + ' -> ' + LONGRUN_PENALTY_MIN + 'min penalty';
+  } else if (isDDUE) {
+    bufNote = 'est ' + estMin + 'min (actual avg)';
+  } else if (buffer > 0) {
+    bufNote = itemBuf
+      ? 'est ' + estMin + '+' + buffer + 'min (' + itemsForBuffer + ' items)'
+      : 'est ' + estMin + '+' + buffer + 'min buffer';
+  } else {
+    bufNote = 'est ' + estMin + 'min (no pad)';
+  }
   document.getElementById('sHrSub').textContent = bufNote;
 
   document.getElementById('sGas').textContent = '$' + gasCost.toFixed(2);
