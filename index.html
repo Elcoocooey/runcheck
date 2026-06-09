@@ -657,21 +657,51 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
 </div>
 
-<div class="inputs" style="grid-template-columns:1fr 1fr 1fr;">
+<div class="inputs" style="grid-template-columns:1fr 1fr 1fr;padding-bottom:6px;">
+  <div class="input-block">
+    <label>Stops</label>
+    <input type="number" inputmode="numeric" id="inStops" placeholder="--" step="1" min="0" oninput="clearResult()">
+  </div>
+  <div class="input-block">
+    <label>Miles</label>
+    <div class="input-unit">mi</div>
+    <input type="text" inputmode="numeric" id="inMiles" placeholder="0.0" oninput="clearResult()" onblur="milesBlur(this)" autocomplete="off">
+  </div>
+  <div class="input-block">
+    <label>Est Time</label>
+    <div class="input-unit">min</div>
+    <input type="number" inputmode="numeric" id="inTime" placeholder="--" step="1" min="0" oninput="clearResult()">
+  </div>
+</div>
+
+<div class="inputs" style="grid-template-columns:1fr 1fr 1fr;padding-top:6px;align-items:stretch;">
   <div class="input-block">
     <label>Pay Offered</label>
     <div class="input-unit">$</div>
     <input type="text" inputmode="numeric" id="inPay" placeholder="0.00" oninput="clearResult()" onblur="payBlur(this)" autocomplete="off">
   </div>
   <div class="input-block">
-    <label>Miles</label>
-    <div class="input-unit">mi</div>
-    <input type="number" inputmode="decimal" id="inMiles" placeholder="0.0" step="0.1" min="0" oninput="onMilesChange()">
+    <label>Items</label>
+    <input type="number" inputmode="numeric" id="inItems" placeholder="--" step="1" min="0" oninput="clearResult()">
   </div>
-  <div class="input-block">
-    <label>Est Time</label>
-    <div class="input-unit">min</div>
-    <input type="number" inputmode="numeric" id="inTime" placeholder="--" step="1" min="0" oninput="clearResult()">
+  <div class="input-block" style="display:flex;flex-direction:column;justify-content:center;align-items:center;gap:5px;">
+    <label id="travelLabel" style="margin:0;">home store</label>
+    <div id="storeToggle" onclick="toggleStore()" style="width:44px;height:24px;border-radius:12px;background:var(--green);cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;">
+      <div id="storeKnob" style="position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#000;transition:left .2s;"></div>
+    </div>
+  </div>
+</div>
+
+<div id="storeMenu" style="display:none;padding: 4px 20px 0;">
+  <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;">
+    <div id="storeButtons" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+      <button class="store-btn" onclick="selectStore(this,'4218',3.3)">4218 &nbsp;3.3mi</button>
+      <button class="store-btn" onclick="selectStore(this,'4336',3.2)">4336 &nbsp;3.2mi</button>
+      <button class="store-btn" onclick="selectStore(this,'5429',6.4)">5429 &nbsp;6.4mi</button>
+      <button class="store-btn" onclick="selectStore(this,'4955',3.7)">4955 &nbsp;3.7mi</button>
+      <button class="store-btn" onclick="selectStore(this,'nearby',1.5)">Nearby &nbsp;~1.5mi</button>
+    </div>
+    <div id="travelNote" style="display:none;font-size:11px;color:var(--amber);"></div>
   </div>
 </div>
 
@@ -685,39 +715,8 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
 </div>
 
-<div id="stopsItemsRow" style="padding: 0 20px; margin-top: 10px;">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-    <div class="input-block">
-      <label>Stops</label>
-      <input type="number" inputmode="numeric" id="inStops" placeholder="--" step="1" min="0" oninput="clearResult()">
-    </div>
-    <div class="input-block">
-      <label>Items</label>
-      <input type="number" inputmode="numeric" id="inItems" placeholder="--" step="1" min="0" oninput="clearResult()">
-    </div>
-  </div>
-</div>
-
-<div style="padding: 0 20px; margin-top: 10px;">
-  <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-      <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;">Store</label>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:11px;color:var(--muted);" id="travelLabel">home store</span>
-        <div id="storeToggle" onclick="toggleStore()" style="width:40px;height:22px;border-radius:11px;background:var(--green);cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;">
-          <div id="storeKnob" style="position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#000;transition:left .2s;"></div>
-        </div>
-      </div>
-    </div>
-    <div id="storeButtons" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-      <button class="store-btn" onclick="selectStore(this,'4218',3.3)">4218 &nbsp;3.3mi</button>
-      <button class="store-btn" onclick="selectStore(this,'4336',3.2)">4336 &nbsp;3.2mi</button>
-      <button class="store-btn" onclick="selectStore(this,'5429',6.4)">5429 &nbsp;6.4mi</button>
-      <button class="store-btn" onclick="selectStore(this,'4955',3.7)">4955 &nbsp;3.7mi</button>
-      <button class="store-btn" onclick="selectStore(this,'nearby',1.5)">Nearby &nbsp;~1.5mi</button>
-    </div>
-    <div id="travelNote" style="display:none;font-size:11px;color:var(--amber);"></div>
-  </div>
+<div class="analyze-wrap">
+  <button class="analyze-btn" onclick="analyze()">CHECK THIS RUN &gt;&gt;</button>
 </div>
 
 <div class="fcfs-row">
@@ -775,10 +774,6 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     </div>
   </div>
   <div class="pace-progress"><div class="pace-fill" id="paceFill" style="width:0%"></div></div>
-</div>
-
-<div class="analyze-wrap">
-  <button class="analyze-btn" onclick="analyze()">CHECK THIS RUN &gt;&gt;</button>
 </div>
 
 <div class="result" id="result">
@@ -986,22 +981,22 @@ function toggleStore() {
   isHomeStore = !isHomeStore;
   var knob = document.getElementById('storeKnob');
   var toggle = document.getElementById('storeToggle');
-  var btns = document.getElementById('storeButtons');
+  var menu = document.getElementById('storeMenu');
   var note = document.getElementById('travelNote');
   var label = document.getElementById('travelLabel');
   if (isHomeStore) {
     knob.style.left = '3px';
     toggle.style.background = 'var(--green)';
-    btns.style.display = 'none';
+    menu.style.display = 'none';
     note.style.display = 'none';
     label.textContent = 'home store';
     travelMiles = 0;
     selectedStore = null;
     document.querySelectorAll('.store-btn').forEach(function(b) { b.classList.remove('active'); });
   } else {
-    knob.style.left = '21px';
+    knob.style.left = '23px';
     toggle.style.background = 'var(--amber)';
-    btns.style.display = 'flex';
+    menu.style.display = 'block';
     label.textContent = 'away store';
     if (selectedStore) updateTravelNote();
   }
@@ -1150,23 +1145,17 @@ function setPlatform(btn, name) {
   document.querySelectorAll('.platform-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   platform = name;
-  // Clear time field on platform switch
-  document.getElementById('inTime').value = '';
-  document.getElementById('inTime').style.color = '';
-  // Show stops/items only for Shop and Curbside
-  var showStopsItems = (name === 'Spark Shop' || name === 'Curbside' || name === 'Shop+Pharmacy');
-  document.getElementById('stopsItemsRow').style.display = showStopsItems ? 'block' : 'none';
-  if (!showStopsItems) {
-    document.getElementById('inStops').value = '';
-    document.getElementById('inItems').value = '';
-  }
-  // If switching to DD/UE and miles already entered, auto-fill time
+  // Stops/items now visible for all order types (capture-only for non-shop) -- no clearing
+  // Est time persists across type switches, except DD/UE which always auto-fills from miles
   if (name === 'DD/UE') {
     var miles = parseFloat(document.getElementById('inMiles').value);
     if (miles > 0) {
       document.getElementById('inTime').value = getDDUETime(miles);
       document.getElementById('inTime').style.color = 'var(--muted)';
     }
+  } else {
+    // Switching away from DD/UE: clear the muted styling if it was auto-filled, keep the value editable
+    document.getElementById('inTime').style.color = '';
   }
   clearResult();
 }
@@ -1190,14 +1179,19 @@ function getPharmMinFare(mi) {
   return 35;
 }
 
-function onMilesChange() {
-  clearResult();
-  var miles = parseFloat(document.getElementById('inMiles').value);
-  if (platform === 'DD/UE' && miles > 0) {
-    var autoTime = getDDUETime(miles);
-    document.getElementById('inTime').value = autoTime;
+function milesBlur(el) {
+  var raw = el.value.replace(/[^0-9]/g, '');
+  if (raw === '') { el.value = ''; clearResult(); return; }
+  // Cash register: digits shift in from the right with one decimal place
+  var val = parseInt(raw, 10) / 10;
+  if (val > 99.9) val = 99.9;
+  el.value = val.toFixed(1);
+  // DD/UE auto-fills est time from miles
+  if (platform === 'DD/UE' && val > 0) {
+    document.getElementById('inTime').value = getDDUETime(val);
     document.getElementById('inTime').style.color = 'var(--muted)';
   }
+  clearResult();
 }
 
 function getDDUETime(miles) {
@@ -1968,7 +1962,7 @@ function resetStore() {
     selectedStore = null;
     document.getElementById('storeKnob').style.left = '3px';
     document.getElementById('storeToggle').style.background = 'var(--green)';
-    document.getElementById('storeButtons').style.display = 'none';
+    document.getElementById('storeMenu').style.display = 'none';
     document.getElementById('travelNote').style.display = 'none';
     document.getElementById('travelLabel').textContent = 'home store';
     document.querySelectorAll('.store-btn').forEach(function(b) { b.classList.remove('active'); });
