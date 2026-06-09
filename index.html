@@ -422,6 +422,15 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   white-space: nowrap;
 }
 .log-btn-row { display: flex; gap: 6px; margin-top: 8px; }
+.reason-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border2); }
+.reason-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+.reason-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.reason-chip {
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 100px; color: var(--muted); font-family: var(--mono);
+  font-size: 10px; padding: 4px 10px; cursor: pointer; transition: all .15s;
+}
+.reason-chip.on { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); font-weight: bold; }
 
 /* Edit modal */
 .modal-overlay {
@@ -678,6 +687,19 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
 </div>
 
+<div id="stopsItemsRow" style="padding: 0 20px; margin-top: 10px;">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    <div class="input-block">
+      <label>Stops</label>
+      <input type="number" inputmode="numeric" id="inStops" placeholder="--" step="1" min="0" oninput="clearResult()">
+    </div>
+    <div class="input-block">
+      <label>Items</label>
+      <input type="number" inputmode="numeric" id="inItems" placeholder="--" step="1" min="0" oninput="clearResult()">
+    </div>
+  </div>
+</div>
+
 <div style="padding: 0 20px; margin-top: 10px;">
   <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -865,8 +887,22 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <input type="number" inputmode="decimal" id="editMiles" step="0.1" min="0">
     </div>
     <div class="modal-field">
+      <label>Est Time (min)</label>
+      <input type="number" inputmode="numeric" id="editTime" step="1" min="0">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;" id="editStopsItemsWrap">
+      <div class="modal-field" style="margin-bottom:0;">
+        <label>Stops</label>
+        <input type="number" inputmode="numeric" id="editStops" step="1" min="0">
+      </div>
+      <div class="modal-field" style="margin-bottom:0;">
+        <label>Items</label>
+        <input type="number" inputmode="numeric" id="editItems" step="1" min="0">
+      </div>
+    </div>
+    <div class="modal-field" style="margin-top:14px;">
       <label>Platform / Order Type</label>
-      <select id="editPlatform">
+      <select id="editPlatform" onchange="onEditPlatformChange()">
         <option value="Spark Shop">Spark Shop</option>
         <option value="Curbside">Curbside</option>
         <option value="Pharmacy">Pharmacy</option>
@@ -1103,6 +1139,13 @@ function setPlatform(btn, name) {
   // Clear time field on platform switch
   document.getElementById('inTime').value = '';
   document.getElementById('inTime').style.color = '';
+  // Show stops/items only for Shop and Curbside
+  var showStopsItems = (name === 'Spark Shop' || name === 'Curbside');
+  document.getElementById('stopsItemsRow').style.display = showStopsItems ? 'block' : 'none';
+  if (!showStopsItems) {
+    document.getElementById('inStops').value = '';
+    document.getElementById('inItems').value = '';
+  }
   // If switching to DD/UE and miles already entered, auto-fill time
   if (name === 'DD/UE') {
     var miles = parseFloat(document.getElementById('inMiles').value);
@@ -1350,6 +1393,16 @@ function renderLog() {
     var threshold = (!e.accepted && e.acceptAt) ? '<div class="log-entry-threshold">accepts at $' + e.acceptAt.toFixed(2) + '+</div>' : '';
     var btnTxt = e.accepted ? '+ ACCEPTED' : 'Mark Accepted';
     var btnCls = 'log-accept-btn' + (e.accepted ? ' on' : '');
+    // Decline-reason row: only on unaccepted ACCEPT/FILLER entries
+    var reasonRow = '';
+    if (!e.accepted && (e.verdict === 'ACCEPT' || e.verdict === 'FILLER')) {
+      var reasons = ['location','food type','too many items','time','economics','other'];
+      var chips = reasons.map(function(r) {
+        var on = (e.declineReason === r) ? ' on' : '';
+        return '<button class="reason-chip' + on + '" onclick="setReason(' + idx + ',\'' + r + '\')">' + r + '</button>';
+      }).join('');
+      reasonRow = '<div class="reason-row"><div class="reason-label">passed -- why?</div><div class="reason-chips">' + chips + '</div></div>';
+    }
     html += '<div class="' + entryCls + '">' +
       '<div class="log-entry-top">' +
         '<div>' +
@@ -1365,6 +1418,7 @@ function renderLog() {
         '<button class="' + btnCls + '" onclick="toggleAccept(' + idx + ')">' + btnTxt + '</button>' +
         '<button class="log-edit-btn" onclick="openEditModal(' + idx + ')">Edit</button>' +
       '</div>' +
+      reasonRow +
     '</div>';
   }
   el.innerHTML = html;
@@ -1411,8 +1465,17 @@ function renderPrevLog() {
 
 function toggleAccept(i) {
   offerLog[i].accepted = !offerLog[i].accepted;
+  // If now accepted, clear any decline reason (you took it)
+  if (offerLog[i].accepted) offerLog[i].declineReason = '';
   saveOfferLog();
   updateLogBadge();
+  renderLog();
+}
+
+function setReason(i, reason) {
+  // Toggle off if tapping the same reason again
+  offerLog[i].declineReason = (offerLog[i].declineReason === reason) ? '' : reason;
+  saveOfferLog();
   renderLog();
 }
 
@@ -1460,14 +1523,17 @@ function exportCSV() {
 
   // Summary row at top
   var summary = '# Date,' + dateStr + ',Hours Worked,' + hrs + ',Offers,' + total + ',Accepted,' + accepted + ',Declined,' + (total - accepted);
-  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Accepts At','Travel Miles'];
+  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles'];
   var rows = src.map(function(e) {
     return [
       e.date, e.time, e.platform, e.orderType,
       e.pay.toFixed(2), e.miles.toFixed(1), e.estMin,
+      (e.stops === undefined || e.stops === '') ? '' : e.stops,
+      (e.items === undefined || e.items === '') ? '' : e.items,
       e.ppm.toFixed(2), e.net.toFixed(2), e.netHr.toFixed(0),
       e.verdict, e.fcfs ? 'YES' : 'NO',
       e.accepted ? 'YES' : 'NO',
+      e.declineReason || '',
       e.acceptAt ? e.acceptAt.toFixed(2) : '',
       e.travelMiles || 0
     ].join(',');
@@ -1497,12 +1563,22 @@ function openEditModal(i) {
   var e = offerLog[i];
   document.getElementById('editPay').value      = e.pay.toFixed(2);
   document.getElementById('editMiles').value    = e.miles.toFixed(1);
+  document.getElementById('editTime').value     = e.estMin || '';
+  document.getElementById('editStops').value    = (e.stops === undefined || e.stops === '') ? '' : e.stops;
+  document.getElementById('editItems').value    = (e.items === undefined || e.items === '') ? '' : e.items;
   document.getElementById('editPlatform').value = e.platform;
   document.getElementById('editModalMeta').textContent = e.date + '  -  ' + e.time + (e.fcfs ? '  -  FCFS' : '  -  Ping');
+  onEditPlatformChange();
   var dBtn = document.getElementById('deleteBtn');
   dBtn.textContent = 'Delete Entry';
   dBtn.classList.remove('confirm');
   document.getElementById('editModal').classList.add('open');
+}
+
+function onEditPlatformChange() {
+  var p = document.getElementById('editPlatform').value;
+  var show = (p === 'Spark Shop' || p === 'Curbside');
+  document.getElementById('editStopsItemsWrap').style.display = show ? 'grid' : 'none';
 }
 
 function closeEditModal() {
@@ -1516,6 +1592,9 @@ function saveEdit() {
   var newPay      = parseFloat(document.getElementById('editPay').value);
   var newMiles    = parseFloat(document.getElementById('editMiles').value);
   var newPlatform = document.getElementById('editPlatform').value;
+  var newTimeRaw  = parseFloat(document.getElementById('editTime').value);
+  var newStopsRaw = parseInt(document.getElementById('editStops').value, 10);
+  var newItemsRaw = parseInt(document.getElementById('editItems').value, 10);
   if (!newPay || !newMiles || newPay <= 0 || newMiles <= 0) {
     alert('Pay and miles must be greater than zero.');
     return;
@@ -1527,8 +1606,10 @@ function saveEdit() {
   var isPharm = (newPlatform === 'Pharmacy');
   var isCR    = (newPlatform === 'Customer Return');
 
-  // Reuse stored estMin if it exists, otherwise re-estimate
-  var estMin = e.estMin || (isDDUE ? getDDUETime(newMiles) : 30);
+  // Use edited est time; fall back to estimate if blank
+  var estMin = (!isNaN(newTimeRaw) && newTimeRaw > 0)
+    ? newTimeRaw
+    : (isDDUE ? getDDUETime(newMiles) : 30);
   var buffer = isDDUE ? 0 : getTimeBuffer(estMin);
   var netHrMin = getNetHrMinutes(estMin, buffer, isDDUE);
 
@@ -1573,10 +1654,15 @@ function saveEdit() {
   e.netHr      = netHr;
   e.verdict    = vWord;
   e.acceptAt   = showThresh ? acceptAt : null;
-  // Preserve manual accept toggle; FILLER and ACCEPT default to accepted only on first creation
-  if (vWord === 'ACCEPT' || vWord === 'FILLER') {
-    // leave e.accepted as-is (user may have already toggled)
+  // Stops/items only apply to Shop and Curbside
+  if (newPlatform === 'Spark Shop' || newPlatform === 'Curbside') {
+    e.stops = isNaN(newStopsRaw) ? '' : newStopsRaw;
+    e.items = isNaN(newItemsRaw) ? '' : newItemsRaw;
+  } else {
+    e.stops = '';
+    e.items = '';
   }
+  // If verdict changed to a non-accept, and entry was auto-accepted, leave accept toggle as user set it
 
   saveOfferLog();
   updateLogBadge();
@@ -1761,6 +1847,8 @@ function analyze() {
   // Save to offer log
   var now = new Date();
   var orderType = platform;
+  var stopsVal = parseInt(document.getElementById('inStops').value, 10);
+  var itemsVal = parseInt(document.getElementById('inItems').value, 10);
   offerLog.push({
     date: now.toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}),
     time: now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
@@ -1769,6 +1857,8 @@ function analyze() {
     pay: pay,
     miles: miles,
     estMin: estMin,
+    stops: isNaN(stopsVal) ? '' : stopsVal,
+    items: isNaN(itemsVal) ? '' : itemsVal,
     ppm: ppm,
     net: net,
     netHr: netHrRate,
@@ -1776,7 +1866,8 @@ function analyze() {
     fcfs: isFCFS,
     accepted: vClass === 'accept' || vClass === 'filler',
     acceptAt: showThresh ? acceptAt : null,
-    travelMiles: travelMiles
+    travelMiles: travelMiles,
+    declineReason: ''
   });
   saveOfferLog();
   updateLogBadge();
@@ -1785,6 +1876,8 @@ function analyze() {
   document.getElementById('inMiles').value = '';
   document.getElementById('inTime').value = '';
   document.getElementById('inTime').style.color = '';
+  document.getElementById('inStops').value = '';
+  document.getElementById('inItems').value = '';
 
   resetFCFS();
 
