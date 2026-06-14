@@ -1,4 +1,11 @@
 <!DOCTYPE html>
+<!--
+  RunCheck v1.14
+  v1.14: DD/UE check auto-resets platform to Spark Shop (verdict stays visible);
+         DD/UE Est Time box read-only + skipped in tab order (Miles -> Pay), auto-calc from miles;
+         accepted-pay running total on Today/Prev log tabs + CSV summary (reference double-check vs earned, accept logic unchanged).
+         Shop+Pharmacy item buffer parked at 0 (data flip ~15 items but thin/weak -- revisit with more rows).
+-->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -621,6 +628,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <div class="log-sum-box"><div class="log-sum-val" id="lsAccepted" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
       <div class="log-sum-box"><div class="log-sum-val" id="lsFCFS" style="color:var(--amber);">0</div><div class="log-sum-lbl">from FCFS</div></div>
     </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:8px 12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">accepted offer pay (double-check vs earned)</span>
+      <span id="lsAcceptedTotal" style="font-size:16px;font-weight:bold;color:var(--green);">$0.00</span>
+    </div>
     <div id="logList"><div class="empty">No offers logged today</div></div>
   </div>
   <div class="log-pane" id="lpane-prev">
@@ -629,6 +640,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <div class="log-sum-box"><div class="log-sum-val" id="lsPrevTotal" style="color:var(--blue);">0</div><div class="log-sum-lbl">pings</div></div>
       <div class="log-sum-box"><div class="log-sum-val" id="lsPrevAccepted" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
       <div class="log-sum-box"><div class="log-sum-val" id="lsPrevFCFS" style="color:var(--amber);">0</div><div class="log-sum-lbl">from FCFS</div></div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:8px 12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">accepted offer pay</span>
+      <span id="lsPrevAcceptedTotal" style="font-size:16px;font-weight:bold;color:var(--green);">$0.00</span>
     </div>
     <div id="prevLogList"><div class="empty">No previous log saved yet</div></div>
   </div>
@@ -657,7 +672,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
 </div>
 
-<div class="inputs" style="grid-template-columns:1fr 1fr 1fr;padding-bottom:6px;">
+<div class="inputs" id="inputRow1" style="grid-template-columns:1fr 1fr 1fr;padding-bottom:6px;">
   <div class="input-block">
     <label>Stops</label>
     <input type="number" inputmode="numeric" id="inStops" placeholder="--" step="1" min="0" oninput="clearResult()">
@@ -667,7 +682,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     <div class="input-unit">mi</div>
     <input type="text" inputmode="numeric" id="inMiles" placeholder="0.0" oninput="clearResult()" onblur="milesBlur(this)" autocomplete="off">
   </div>
-  <div class="input-block">
+  <div class="input-block" id="timeBlock">
     <label>Est Time</label>
     <div class="input-unit">min</div>
     <input type="number" inputmode="numeric" id="inTime" placeholder="--" step="1" min="0" oninput="clearResult()">
@@ -706,13 +721,13 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 </div>
 
 <div class="platform-row">
-  <button class="platform-btn active" onclick="setPlatform(this,'Spark Shop')">Spark Shop</button>
-  <button class="platform-btn" onclick="setPlatform(this,'Curbside')">Curbside</button>
-  <button class="platform-btn" onclick="setPlatform(this,'DD/UE')">DD / UE</button>
-  <button class="platform-btn" onclick="setPlatform(this,'Pharmacy')">Pharmacy</button>
-  <button class="platform-btn" onclick="setPlatform(this,'Shop+Pharmacy')">Shop+Pharm</button>
-  <button class="platform-btn" onclick="setPlatform(this,'Customer Return')">Return</button>
-  <button class="platform-btn" onclick="setPlatform(this,'Other')">Other</button>
+  <button class="platform-btn active" data-pf="Spark Shop" onclick="selectPlatform('Spark Shop')">Spark Shop</button>
+  <button class="platform-btn" data-pf="Curbside" onclick="selectPlatform('Curbside')">Curbside</button>
+  <button class="platform-btn" data-pf="DD/UE" onclick="selectPlatform('DD/UE')">DD / UE</button>
+  <button class="platform-btn" data-pf="Pharmacy" onclick="selectPlatform('Pharmacy')">Pharmacy</button>
+  <button class="platform-btn" data-pf="Shop+Pharmacy" onclick="selectPlatform('Shop+Pharmacy')">Shop+Pharm</button>
+  <button class="platform-btn" data-pf="Customer Return" onclick="selectPlatform('Customer Return')">Return</button>
+  <button class="platform-btn" data-pf="Other" onclick="selectPlatform('Other')">Other</button>
 </div>
 
 <div class="analyze-wrap">
@@ -1141,23 +1156,28 @@ function manualGas(v) {
   syncGasBadge();
 }
 
-function setPlatform(btn, name) {
-  document.querySelectorAll('.platform-btn').forEach(function(b) { b.classList.remove('active'); });
-  btn.classList.add('active');
+function selectPlatform(name, keepResult) {
+  document.querySelectorAll('.platform-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-pf') === name);
+  });
   platform = name;
-  // Stops/items now visible for all order types (capture-only for non-shop) -- no clearing
-  // Est time persists across type switches, except DD/UE which always auto-fills from miles
-  if (name === 'DD/UE') {
+  var isDD = (name === 'DD/UE');
+  var t = document.getElementById('inTime');
+  // #2: DD/UE est time auto-calcs from miles. Keep the box VISIBLE but read-only,
+  // and skip it in tab order so Next jumps Miles -> Pay Offered.
+  if (isDD) {
+    t.readOnly = true;
+    t.tabIndex = -1;
+    t.style.color = 'var(--muted)';
     var miles = parseFloat(document.getElementById('inMiles').value);
-    if (miles > 0) {
-      document.getElementById('inTime').value = getDDUETime(miles);
-      document.getElementById('inTime').style.color = 'var(--muted)';
-    }
+    t.value = (miles > 0) ? getDDUETime(miles) : '';
   } else {
-    // Switching away from DD/UE: clear the muted styling if it was auto-filled, keep the value editable
-    document.getElementById('inTime').style.color = '';
+    t.readOnly = false;
+    t.removeAttribute('tabindex');
+    t.style.color = '';
   }
-  clearResult();
+  // Stops/items stay visible for all order types (capture-only for non-shop) -- no clearing
+  if (!keepResult) clearResult();
 }
 
 function clearResult() {
@@ -1421,6 +1441,8 @@ function renderLog() {
   document.getElementById('lsTotal').textContent    = pings;
   document.getElementById('lsAccepted').textContent = accepted;
   document.getElementById('lsFCFS').textContent     = fcfs;
+  var acceptedPay = offerLog.reduce(function(s, e) { return s + (e.accepted ? (e.pay || 0) : 0); }, 0);
+  document.getElementById('lsAcceptedTotal').textContent = '$' + acceptedPay.toFixed(2);
   if (!offerLog.length) { el.innerHTML = '<div class="empty">No offers logged today</div>'; return; }
   var html = '';
   // Reverse iteration -- most recent first
@@ -1472,6 +1494,8 @@ function renderPrevLog() {
   document.getElementById('lsPrevTotal').textContent    = pings;
   document.getElementById('lsPrevAccepted').textContent = accepted;
   document.getElementById('lsPrevFCFS').textContent     = fcfs;
+  var prevAcceptedPay = prevLog.reduce(function(s, e) { return s + (e.accepted ? (e.pay || 0) : 0); }, 0);
+  document.getElementById('lsPrevAcceptedTotal').textContent = '$' + prevAcceptedPay.toFixed(2);
   if (!prevLog.length) {
     lbl.textContent = 'no previous log saved yet';
     el.innerHTML = '<div class="empty">No previous log saved yet</div>';
@@ -1561,7 +1585,8 @@ function exportCSV() {
   }
 
   // Summary row at top
-  var summary = '# Date,' + dateStr + ',Hours Worked,' + hrs + ',Offers,' + total + ',Accepted,' + accepted + ',Declined,' + (total - accepted);
+  var acceptedPay = src.reduce(function(s, e) { return s + (e.accepted ? (e.pay || 0) : 0); }, 0);
+  var summary = '# Date,' + dateStr + ',Hours Worked,' + hrs + ',Offers,' + total + ',Accepted,' + accepted + ',Accepted Pay,' + acceptedPay.toFixed(2) + ',Declined,' + (total - accepted);
   var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles'];
   var rows = src.map(function(e) {
     return [
@@ -1741,10 +1766,13 @@ function analyze() {
   var isPharm = (platform === 'Pharmacy');
   var isCR    = (platform === 'Customer Return');
 
-  // Resolve estimated time
-  var estMin = isNaN(estRaw) || estRaw <= 0
-    ? (isDDUE ? getDDUETime(miles) : 30)
-    : estRaw;
+  // Resolve estimated time. DD/UE always derives from miles (time box is hidden for DD).
+  var estMin;
+  if (isDDUE) {
+    estMin = getDDUETime(miles);
+  } else {
+    estMin = (isNaN(estRaw) || estRaw <= 0) ? 30 : estRaw;
+  }
 
   // Item count for Shop buffer (only Spark Shop uses item-aware buffer)
   var itemsRaw = parseInt(document.getElementById('inItems').value, 10);
@@ -1953,6 +1981,10 @@ function analyze() {
   resetFCFS();
 
   resetStore();
+
+  // #1: after a DD/UE check, snap the platform back to Spark Shop for the next offer.
+  // keepResult=true so the verdict we just rendered stays on screen.
+  if (isDDUE) selectPlatform('Spark Shop', true);
 }
 
 function resetStore() {
