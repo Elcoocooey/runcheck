@@ -1,6 +1,23 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.14
+  RunCheck v1.15
+  v1.15: Consolidated release on top of v1.14 (nothing between went live).
+         1. CSV export hardening -- RFC-4180 cell escaping: embedded newlines in any
+            field collapse to a space (root cause of silently merged rows), comma/quote
+            fields are quoted, CRLF row terminators.
+         2. Accepted-run capture -- new "Accepted" log tab lists every accepted offer
+            with a per-run actuals form (actual time / miles / items, then fare / tip /
+            cash tip) and a live Actual Total = fare+tip+cash with +/- vs offered pay.
+            Earned-so-far + CSV Earned use actual total when money is entered, else
+            offered pay. Form order: Fare / Tip / Cash Tip, then Items, Act Mi, Act
+            Time. Spark Shop with 3+ stops (and Shop+Pharmacy with 4+ stops) splits
+            Items into A / B per order; combined total feeds the Actual Items column. DD/UE accepted form
+            is just Fare+Tip (one combined input) / Act Mi / Act Time -- no separate
+            tip, cash, or items (combined lands in Actual Fare).
+         3. CSV gains Actual Time/Miles/Items/Fare/Tip/Cash Tip/Actual Total columns
+            (appended; existing column order unchanged) + Fare/Tip/Cash/Earned in the
+            summary row. Single combined CSV (accepted rows flagged Accepted=YES).
+         Capture-only -- no verdict or analysis logic changed.
   v1.14: DD/UE check auto-resets platform to Spark Shop (verdict stays visible);
          DD/UE Est Time box read-only + skipped in tab order (Miles -> Pay), auto-calc from miles;
          accepted-pay running total on Today/Prev log tabs + CSV summary (reference double-check vs earned, accept logic unchanged).
@@ -436,6 +453,29 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 }
 .reason-chip.on { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); font-weight: bold; }
 
+/* Accepted-run actuals capture */
+.acc-card { background: var(--surface2); border: 1px solid var(--border2); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.acc-card.logged { border-color: var(--green-b); }
+.acc-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.acc-offer { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.acc-offer strong { color: var(--text); font-size: 14px; }
+.acc-state { font-size: 9px; font-weight: bold; padding: 2px 8px; border-radius: 100px; flex-shrink: 0; margin-left: 8px; }
+.acc-pending { background: var(--amber-dim); color: var(--amber); }
+.acc-done { background: var(--green-dim); color: var(--green); }
+.acc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.acc-field { background: var(--bg); border: 1px solid var(--border2); border-radius: 8px; padding: 7px 8px; }
+.acc-field:focus-within { border-color: var(--green); }
+.acc-field label { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 2px; }
+.acc-field input { background: transparent; border: none; outline: none; color: var(--text); font-family: var(--mono); font-size: 16px; font-weight: bold; width: 100%; padding: 0; -webkit-appearance: none; appearance: none; }
+.acc-field input::placeholder { color: #2a2a2a; }
+.acc-save { width: 100%; background: var(--green); border: none; border-radius: 8px; color: #000; font-family: var(--mono); font-size: 12px; font-weight: bold; padding: 9px; cursor: pointer; transition: opacity .1s; }
+.acc-save:active { opacity: 0.85; }
+.acc-save.saved { background: var(--surface); color: var(--green); border: 1px solid var(--green); }
+.acc-total { display: flex; justify-content: space-between; align-items: center; background: var(--bg); border: 1px solid var(--border2); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+.acc-total-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.acc-total-val { font-size: 16px; font-weight: bold; color: var(--green); }
+.acc-total-sub { font-size: 9px; color: var(--muted); }
+
 /* Edit modal */
 .modal-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -618,8 +658,9 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 
 <div class="log-panel" id="logPanel">
   <div class="log-tabs">
-    <button class="log-tab active" onclick="switchLogTab('today')">Today's Log</button>
-    <button class="log-tab" onclick="switchLogTab('prev')">Prev Log</button>
+    <button class="log-tab active" onclick="switchLogTab('today')">Today</button>
+    <button class="log-tab" onclick="switchLogTab('accepted')">Accepted</button>
+    <button class="log-tab" onclick="switchLogTab('prev')">Prev</button>
     <button class="log-tab" onclick="switchLogTab('export')">Export</button>
   </div>
   <div class="log-pane active" id="lpane-today">
@@ -633,6 +674,18 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <span id="lsAcceptedTotal" style="font-size:16px;font-weight:bold;color:var(--green);">$0.00</span>
     </div>
     <div id="logList"><div class="empty">No offers logged today</div></div>
+  </div>
+  <div class="log-pane" id="lpane-accepted">
+    <div class="log-summary">
+      <div class="log-sum-box"><div class="log-sum-val" id="accAccepted" style="color:var(--green);">0</div><div class="log-sum-lbl">accepted</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="accLogged" style="color:var(--blue);">0</div><div class="log-sum-lbl">actuals in</div></div>
+      <div class="log-sum-box"><div class="log-sum-val" id="accPending" style="color:var(--amber);">0</div><div class="log-sum-lbl">pending</div></div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:8px 12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">earned so far (fare + tip + cash)</span>
+      <span id="accEarned" style="font-size:16px;font-weight:bold;color:var(--green);">$0.00</span>
+    </div>
+    <div id="acceptedList"><div class="empty">No accepted runs yet. Mark offers accepted on the Today tab.</div></div>
   </div>
   <div class="log-pane" id="lpane-prev">
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px;text-align:center;" id="prevDateLabel">no previous log saved</div>
@@ -1400,14 +1453,15 @@ function toggleGasPanel() {
 }
 
 function switchLogTab(name) {
+  var names = ['today','accepted','prev','export'];
   document.querySelectorAll('.log-tab').forEach(function(t,i) {
-    var names = ['today','prev','export'];
     t.classList.toggle('active', names[i] === name);
   });
   document.querySelectorAll('.log-pane').forEach(function(p) { p.classList.remove('active'); });
   document.getElementById('lpane-' + name).classList.add('active');
-  if (name === 'export') renderExportSummary();
-  if (name === 'prev')   renderPrevLog();
+  if (name === 'export')   renderExportSummary();
+  if (name === 'prev')     renderPrevLog();
+  if (name === 'accepted') renderAccepted();
 }
 
 function switchExportDay(day) {
@@ -1542,6 +1596,203 @@ function setReason(i, reason) {
   renderLog();
 }
 
+// === ACCEPTED CAPTURE (v1.15) -- actuals logging for accepted runs ===
+// Capture-only: stores actual time / miles / items / cash tip on the offer-log entry.
+// No verdict or analysis logic -- those live in the analysis thread, fed by the CSV.
+function hasActuals(e) {
+  return e.actualTime !== '' && e.actualTime !== undefined && e.actualTime !== null;
+}
+function hasMoney(e) {
+  return (e.actualFare !== '' && e.actualFare != null) ||
+         (e.actualTip  !== '' && e.actualTip  != null) ||
+         (e.cashTip     !== '' && e.cashTip     != null);
+}
+function isLogged(e) { return hasActuals(e) || hasMoney(e); }
+// Actual total earned = fare + tip + cash tip (matches workbook columns).
+function actualTotal(e) {
+  return (parseFloat(e.actualFare) || 0) + (parseFloat(e.actualTip) || 0) + (parseFloat(e.cashTip) || 0);
+}
+
+// Accepted-form money/miles entry mirrors the offer page (cash-register on blur).
+// moneyParse: same rule as payBlur (1-2 digits = whole dollars, 3+ = last 2 are cents).
+function moneyParse(raw) {
+  var d = String(raw).replace(/[^0-9]/g, '');
+  if (d === '') return NaN;
+  if (d.length <= 2) return parseInt(d, 10);
+  var cents = parseInt(d, 10);
+  if (cents > 999999) cents = 999999;
+  return cents / 100;
+}
+// milesParse: same rule as milesBlur (digits shift in with one decimal place).
+function milesParse(raw) {
+  var d = String(raw).replace(/[^0-9]/g, '');
+  if (d === '') return NaN;
+  var v = parseInt(d, 10) / 10;
+  if (v > 99.9) v = 99.9;
+  return v;
+}
+function fmtMoney(v) { return (v === '' || v == null) ? '' : Number(v).toFixed(2); }
+function fmtMiles(v) { return (v === '' || v == null) ? '' : Number(v).toFixed(1); }
+function actMoneyBlur(el, idx) {
+  var v = moneyParse(el.value);
+  el.value = isNaN(v) ? '' : v.toFixed(2);
+  recalcActualTotal(idx);
+}
+function actMilesBlur(el) {
+  var v = milesParse(el.value);
+  el.value = isNaN(v) ? '' : v.toFixed(1);
+}
+// Items split into order A / B for bundled multi-order runs.
+// Spark Shop: 3+ stops. Shop+Pharmacy: 4+ stops (the pharmacy leg adds a stop).
+function splitItemsFor(e) {
+  return (e.platform === 'Spark Shop'    && Number(e.stops) > 2) ||
+         (e.platform === 'Shop+Pharmacy' && Number(e.stops) > 3);
+}
+
+function renderAccepted() {
+  var el = document.getElementById('acceptedList');
+  var acc = [];
+  for (var i = 0; i < offerLog.length; i++) { if (offerLog[i].accepted) acc.push(i); }
+  var logged = 0, earned = 0;
+  acc.forEach(function(i) {
+    var e = offerLog[i];
+    if (isLogged(e)) logged++;
+    // truer running total: actual money when entered, else fall back to offered pay
+    earned += hasMoney(e) ? actualTotal(e) : (e.pay || 0);
+  });
+  document.getElementById('accAccepted').textContent = acc.length;
+  document.getElementById('accLogged').textContent   = logged;
+  document.getElementById('accPending').textContent  = acc.length - logged;
+  document.getElementById('accEarned').textContent   = '$' + earned.toFixed(2);
+
+  if (!acc.length) {
+    el.innerHTML = '<div class="empty">No accepted runs yet. Mark offers accepted on the Today tab.</div>';
+    return;
+  }
+  var html = '';
+  for (var j = acc.length - 1; j >= 0; j--) {
+    var idx = acc[j];
+    var e = offerLog[idx];
+    var done = isLogged(e);
+    var aT = (e.actualTime  === '' || e.actualTime  == null) ? '' : e.actualTime;
+    var aM = fmtMiles(e.actualMiles);
+    var aI = (e.actualItems === '' || e.actualItems == null) ? '' : e.actualItems;
+    var aF = fmtMoney(e.actualFare);
+    var aP = fmtMoney(e.actualTip);
+    var aC = fmtMoney(e.cashTip);
+    var aIA = (e.actualItemsA === '' || e.actualItemsA == null) ? '' : e.actualItemsA;
+    var aIB = (e.actualItemsB === '' || e.actualItemsB == null) ? '' : e.actualItemsB;
+    var itemsOffer = (e.items === '' || e.items == null) ? '-' : e.items;
+    var isDD = (e.platform === 'DD/UE');
+    // Multi-shop Spark Shop (3+ stops = bundled orders): items split into order A / order B
+    var splitItems = splitItemsFor(e);
+    var stopsTag = splitItems ? ' &middot; ' + e.stops + ' stops (multi-shop)' : '';
+    var itemsFields = splitItems
+      ? '<div class="acc-field"><label>Items A</label><input type="number" inputmode="numeric" id="act-itemsA-' + idx + '" value="' + aIA + '" placeholder="#" step="1" min="0"></div>' +
+        '<div class="acc-field"><label>Items B</label><input type="number" inputmode="numeric" id="act-itemsB-' + idx + '" value="' + aIB + '" placeholder="#" step="1" min="0"></div>'
+      : '<div class="acc-field"><label>Act Items</label><input type="number" inputmode="numeric" id="act-items-' + idx + '" value="' + aI + '" placeholder="#" step="1" min="0"></div>';
+    var milesField = '<div class="acc-field"><label>Act Mi</label><input type="text" inputmode="numeric" id="act-miles-' + idx + '" value="' + aM + '" placeholder="0.0" onblur="actMilesBlur(this)" autocomplete="off"></div>';
+    var timeField  = '<div class="acc-field"><label>Act Time</label><input type="number" inputmode="numeric" id="act-time-' + idx + '" value="' + aT + '" placeholder="min" step="1" min="0"></div>';
+    // DD/UE: fare+tip combined (one input), no items/cash. Spark types: full money + items.
+    var gridInner;
+    if (isDD) {
+      gridInner =
+        '<div class="acc-field"><label>Fare+Tip</label><input type="text" inputmode="numeric" id="act-fare-' + idx + '" value="' + aF + '" placeholder="0.00" oninput="recalcActualTotal(' + idx + ')" onblur="actMoneyBlur(this,' + idx + ')" autocomplete="off"></div>' +
+        milesField + timeField;
+    } else {
+      gridInner =
+        '<div class="acc-field"><label>Fare</label><input type="text" inputmode="numeric" id="act-fare-' + idx + '" value="' + aF + '" placeholder="0.00" oninput="recalcActualTotal(' + idx + ')" onblur="actMoneyBlur(this,' + idx + ')" autocomplete="off"></div>' +
+        '<div class="acc-field"><label>Tip</label><input type="text" inputmode="numeric" id="act-tip-' + idx + '" value="' + aP + '" placeholder="0.00" oninput="recalcActualTotal(' + idx + ')" onblur="actMoneyBlur(this,' + idx + ')" autocomplete="off"></div>' +
+        '<div class="acc-field"><label>Cash Tip</label><input type="text" inputmode="numeric" id="act-cash-' + idx + '" value="' + aC + '" placeholder="0.00" oninput="recalcActualTotal(' + idx + ')" onblur="actMoneyBlur(this,' + idx + ')" autocomplete="off"></div>' +
+        itemsFields + milesField + timeField;
+    }
+    var totalNow = actualTotal(e);
+    var vsOffer = totalNow > 0 ? (totalNow - e.pay) : 0;
+    var vsStr = totalNow > 0 ? ((vsOffer >= 0 ? '+$' : '-$') + Math.abs(vsOffer).toFixed(2) + ' vs offer') : (isDD ? 'enter fare+tip' : 'enter fare/tip/cash');
+    var offerMid = e.miles.toFixed(1) + 'mi &middot; ' + e.estMin + 'min' + (isDD ? '' : (' &middot; ' + itemsOffer + ' items' + stopsTag));
+    html += '<div class="acc-card' + (done ? ' logged' : '') + '">' +
+      '<div class="acc-top">' +
+        '<div class="acc-offer">' +
+          '<strong>$' + e.pay.toFixed(2) + '</strong> offered &middot; ' + offerMid + '<br>' +
+          e.platform + ' &nbsp;&middot;&nbsp; ' + e.time +
+        '</div>' +
+        '<span class="acc-state ' + (done ? 'acc-done' : 'acc-pending') + '">' + (done ? 'LOGGED' : 'PENDING') + '</span>' +
+      '</div>' +
+      '<div class="acc-grid">' +
+        gridInner +
+      '</div>' +
+      '<div class="acc-total">' +
+        '<span class="acc-total-lbl">Actual total<br><span class="acc-total-sub" id="act-vs-' + idx + '">' + vsStr + '</span></span>' +
+        '<span class="acc-total-val" id="act-total-' + idx + '">$' + totalNow.toFixed(2) + '</span>' +
+      '</div>' +
+      '<button class="acc-save' + (done ? ' saved' : '') + '" onclick="saveActuals(' + idx + ')">' + (done ? 'UPDATE ACTUALS' : 'SAVE ACTUALS') + '</button>' +
+    '</div>';
+  }
+  el.innerHTML = html;
+}
+
+// Live recompute of fare+tip+cash total as the driver types (no save needed to see it).
+function recalcActualTotal(idx) {
+  var e = offerLog[idx];
+  function val(id) { var el = document.getElementById(id); if (!el) return 0; var v = moneyParse(el.value); return isNaN(v) ? 0 : v; }
+  var total = val('act-fare-' + idx) + val('act-tip-' + idx) + val('act-cash-' + idx);
+  var tEl = document.getElementById('act-total-' + idx);
+  var vEl = document.getElementById('act-vs-' + idx);
+  if (tEl) tEl.textContent = '$' + total.toFixed(2);
+  if (vEl) {
+    if (total > 0 && e) {
+      var d = total - e.pay;
+      vEl.textContent = (d >= 0 ? '+$' : '-$') + Math.abs(d).toFixed(2) + ' vs offer';
+    } else {
+      vEl.textContent = 'enter fare/tip/cash';
+    }
+  }
+}
+
+function saveActuals(idx) {
+  var e = offerLog[idx];
+  if (!e) return;
+  function money(id) { var el = document.getElementById(id); return el ? moneyParse(el.value) : NaN; }
+  function miles(id) { var el = document.getElementById(id); return el ? milesParse(el.value) : NaN; }
+  function intv(id)  { var el = document.getElementById(id); return el ? parseInt(el.value, 10) : NaN; }
+  var t = intv('act-time-'  + idx);
+  var m = miles('act-miles-' + idx);
+  var f = money('act-fare-'  + idx);
+  e.actualTime  = isNaN(t) ? '' : t;
+  e.actualMiles = isNaN(m) ? '' : m;
+  e.actualFare  = isNaN(f) ? '' : f;   // DD/UE: this single field is fare+tip combined
+  var isDD = (e.platform === 'DD/UE');
+  if (isDD) {
+    // DD/UE has no separate tip, no cash tip, no items
+    e.actualTip = '';
+    e.cashTip   = '';
+    e.actualItems = '';
+    e.actualItemsA = '';
+    e.actualItemsB = '';
+  } else {
+    var p = money('act-tip-'  + idx);
+    var c = money('act-cash-' + idx);
+    e.actualTip = isNaN(p) ? '' : p;
+    e.cashTip   = isNaN(c) ? '' : c;
+    // Items: split A/B for 3+ stop Spark Shop, else single. actualItems holds the combined total.
+    var splitItems = splitItemsFor(e);
+    if (splitItems) {
+      var ia = intv('act-itemsA-' + idx);
+      var ib = intv('act-itemsB-' + idx);
+      e.actualItemsA = isNaN(ia) ? '' : ia;
+      e.actualItemsB = isNaN(ib) ? '' : ib;
+      e.actualItems  = (isNaN(ia) && isNaN(ib)) ? '' : ((isNaN(ia) ? 0 : ia) + (isNaN(ib) ? 0 : ib));
+    } else {
+      var it = intv('act-items-' + idx);
+      e.actualItems  = isNaN(it) ? '' : it;
+      e.actualItemsA = '';
+      e.actualItemsB = '';
+    }
+  }
+  saveOfferLog();
+  renderAccepted();
+}
+
 function adjustShiftHrs(delta) {
   var el = document.getElementById('shiftHrsWorked');
   var val = parseFloat(el.value) || 0;
@@ -1584,12 +1835,37 @@ function exportCSV() {
     dateStr = now.getFullYear() + '-' + mm + '-' + dd;
   }
 
+  // RFC-4180 cell escaping. ROOT FIX for the merged-rows bug:
+  // any embedded newline in a field is collapsed to a single space so it can
+  // never be read as a row terminator. Commas/quotes get quoted + doubled.
+  function csvCell(v) {
+    var s = (v === undefined || v === null) ? '' : String(v);
+    s = s.replace(/\r\n|\r|\n/g, ' ');          // neutralize embedded newlines
+    if (/[",]/.test(s)) {
+      s = '"' + s.replace(/"/g, '""') + '"';     // quote field + escape internal quotes
+    }
+    return s;
+  }
+  function csvRow(arr) { return arr.map(csvCell).join(','); }
+
   // Summary row at top
   var acceptedPay = src.reduce(function(s, e) { return s + (e.accepted ? (e.pay || 0) : 0); }, 0);
-  var summary = '# Date,' + dateStr + ',Hours Worked,' + hrs + ',Offers,' + total + ',Accepted,' + accepted + ',Accepted Pay,' + acceptedPay.toFixed(2) + ',Declined,' + (total - accepted);
-  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles'];
+  var fareSum     = src.reduce(function(s, e) { return s + (e.accepted ? (parseFloat(e.actualFare) || 0) : 0); }, 0);
+  var tipSum      = src.reduce(function(s, e) { return s + (e.accepted ? (parseFloat(e.actualTip)  || 0) : 0); }, 0);
+  var cashTips    = src.reduce(function(s, e) { return s + (e.accepted ? (parseFloat(e.cashTip)    || 0) : 0); }, 0);
+  // Earned: actual total (fare+tip+cash) where money was entered, else offered pay.
+  var earnedSum   = src.reduce(function(s, e) {
+    if (!e.accepted) return s;
+    var money = (parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0);
+    var hasM  = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
+    return s + (hasM ? money : (e.pay || 0));
+  }, 0);
+  var summary = csvRow(['# Date', dateStr, 'Hours Worked', hrs, 'Offers', total, 'Accepted', accepted, 'Accepted Pay', acceptedPay.toFixed(2), 'Fare', fareSum.toFixed(2), 'Tip', tipSum.toFixed(2), 'Cash Tips', cashTips.toFixed(2), 'Earned', earnedSum.toFixed(2), 'Declined', (total - accepted)]);
+  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles','Actual Time','Actual Miles','Actual Items','Actual Fare','Actual Tip','Cash Tip','Actual Total','Actual Items A','Actual Items B'];
   var rows = src.map(function(e) {
-    return [
+    var hasM = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
+    var actTotal = hasM ? ((parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0)).toFixed(2) : '';
+    return csvRow([
       e.date, e.time, e.platform, e.orderType,
       e.pay.toFixed(2), e.miles.toFixed(1), e.estMin,
       (e.stops === undefined || e.stops === '') ? '' : e.stops,
@@ -1599,11 +1875,21 @@ function exportCSV() {
       e.accepted ? 'YES' : 'NO',
       e.declineReason || '',
       e.acceptAt ? e.acceptAt.toFixed(2) : '',
-      e.travelMiles || 0
-    ].join(',');
+      e.travelMiles || 0,
+      (e.actualTime  === undefined || e.actualTime  === '' || e.actualTime  === null) ? '' : e.actualTime,
+      (e.actualMiles === undefined || e.actualMiles === '' || e.actualMiles === null) ? '' : e.actualMiles,
+      (e.actualItems === undefined || e.actualItems === '' || e.actualItems === null) ? '' : e.actualItems,
+      (e.actualFare  === undefined || e.actualFare  === '' || e.actualFare  === null) ? '' : e.actualFare,
+      (e.actualTip   === undefined || e.actualTip   === '' || e.actualTip   === null) ? '' : e.actualTip,
+      (e.cashTip     === undefined || e.cashTip     === '' || e.cashTip     === null) ? '' : e.cashTip,
+      actTotal,
+      (e.actualItemsA === undefined || e.actualItemsA === '' || e.actualItemsA === null) ? '' : e.actualItemsA,
+      (e.actualItemsB === undefined || e.actualItemsB === '' || e.actualItemsB === null) ? '' : e.actualItemsB
+    ]);
   });
 
-  var csv = summary + '\n' + headers.join(',') + '\n' + rows.join('\n');
+  // CRLF row terminator (Excel-safe); fields are already newline-neutralized above.
+  var csv = summary + '\r\n' + csvRow(headers) + '\r\n' + rows.join('\r\n');
   var blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
@@ -1966,7 +2252,15 @@ function analyze() {
     accepted: vClass === 'accept' || vClass === 'filler',
     acceptAt: showThresh ? acceptAt : null,
     travelMiles: travelMiles,
-    declineReason: ''
+    declineReason: '',
+    actualTime: '',
+    actualMiles: '',
+    actualItems: '',
+    actualItemsA: '',
+    actualItemsB: '',
+    actualFare: '',
+    actualTip: '',
+    cashTip: ''
   });
   saveOfferLog();
   updateLogBadge();
