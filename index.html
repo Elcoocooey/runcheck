@@ -1,6 +1,27 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.15
+  RunCheck v1.16
+  v1.16: (1) Edit Offer modal gains an FCFS toggle -- a logged run's FCFS/Ping flag can
+            now be corrected after the fact (prefilled from the entry, written back on
+            save; cascades to the FCFS badge, summary counts, and CSV). Static FCFS/Ping
+            text dropped from the edit meta line (the live toggle is now the source).
+         Criteria refresh (from RUNCHECK_CRITERIA_HANDOFF, analysis-thread derived):
+         (2) PPM gas floor removed -- SPARK_GAS_PPM and DDUE_FILLER_MIN_PPM tokened to
+            1.0 as inert backstops. Net/hr >= 22 already clears all-in cost; the 2.0 floor
+            caught 0 losers and killed ~12% of profitable, time-efficient runs. Net-positive
+            remains the "not losing money" guard.
+         (3) Rule card replaced: the old distance-based minimum-fare table (obsolete now
+            that min fares don't gate) is gone. New "verdict gate + platform rules" card
+            leads with the applied gate (net >= $22/hr, no PPM floor) and gives each
+            platform its own chip in a consistent format -- Spark Shop (0.4 min/item pad),
+            Curbside (+4 min/stop over 3), Pharmacy, Shop+Pharmacy, DD/UE (>=$15/hr filler).
+            Stale ">$2.50/mi" labels and the "floor: $2.50/mi" PPM sub-label removed.
+         (4) Curbside gets a provisional stop-based buffer max(0,(stops-3)*4) min (batched,
+            ~3.7 min/stop); est-tier stays as fallback when stop count isn't shown at offer
+            time. Provisional -- magnitude rides on thin 5-8 stop cells.
+         (5) DD/UE filler net/hr floor 20 -> 15 (provisional): a quick (<=25min) $5-6 DD run
+            beats $0 idle. Monitor for missed Spark pings mid-run.
+         No change to LONGRUN/HARD_DECLINE, SPARK_ACCEPT_HR (22), other buffers, or gas source.
   v1.15: Consolidated release on top of v1.14 (nothing between went live).
          1. CSV export hardening -- RFC-4180 cell escaping: embedded newlines in any
             field collapse to a space (root cause of silently merged rows), comma/quote
@@ -555,6 +576,18 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 }
 .fcfs-toggle.on .fcfs-knob { left: 21px; }
 
+/* FCFS toggle row inside the edit modal (no page margins) */
+.edit-fcfs-row {
+  margin-top: 14px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 /* Export */
 .export-btn {
   width: 100%; background: var(--blue); border: none; border-radius: 10px;
@@ -854,7 +887,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     <div class="stat">
       <div class="stat-label">Pay / Mile</div>
       <div class="stat-value green" id="sPPM">--</div>
-      <div class="stat-sub" id="sPPMsub">floor: $2.50/mi</div>
+      <div class="stat-sub" id="sPPMsub">no PPM floor</div>
     </div>
     <div class="stat">
       <div class="stat-label">Net After Gas</div>
@@ -885,52 +918,62 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 </div>
 
 <div class="section">
-  <div class="section-title">minimum fare reference</div>
+  <div class="section-title">verdict gate + platform rules</div>
   <div class="rules-grid">
-    <div class="rule-chip">
-      <div class="rule-dist">0 - 2 mi</div>
-      <div class="rule-right"><div class="rule-min">$9</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
-    </div>
-    <div class="rule-chip">
-      <div class="rule-dist">2 - 4 mi</div>
-      <div class="rule-right"><div class="rule-min">$11</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
-    </div>
-    <div class="rule-chip">
-      <div class="rule-dist">4 - 6 mi</div>
-      <div class="rule-right"><div class="rule-min">$14</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
-    </div>
-    <div class="rule-chip">
-      <div class="rule-dist">6 - 10 mi</div>
-      <div class="rule-right"><div class="rule-min">$18</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
-    </div>
-    <div class="rule-chip">
-      <div class="rule-dist">10+ mi</div>
-      <div class="rule-right"><div class="rule-min">$25</div><div class="rule-ppm">&gt;$2.50/mi</div></div>
+    <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
+      <div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--green);">Applied gate</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">net &ge; $22/hr after gas &nbsp;&middot;&nbsp; time-value driven &nbsp;&middot;&nbsp; no PPM floor</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="rule-min" style="color:var(--green);">$22</div>
+        <div class="rule-ppm">/hr net</div>
+      </div>
     </div>
     <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
       <div>
-        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Pharmacy (miles-based fare)</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px;">0-4mi &rarr; $9 &nbsp;&nbsp; 4-6mi &rarr; $13 &nbsp;&nbsp; 6-10mi &rarr; $20 &nbsp;&nbsp; 10+mi &rarr; $35</div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Spark Shop</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">gate net &ge; $22/hr &nbsp;&middot;&nbsp; item-aware time pad ~0.4 min/item (~24s)</div>
       </div>
       <div style="text-align:right;">
-        <div class="rule-min">$9+</div>
-        <div class="rule-ppm">&gt;$2.50/mi</div>
+        <div class="rule-min">0.4</div>
+        <div class="rule-ppm">min / item</div>
+      </div>
+    </div>
+    <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
+      <div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Curbside (batched)</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">gate net &ge; $22/hr &nbsp;&middot;&nbsp; stop-aware time pad +4 min per stop over 3</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="rule-min">+4</div>
+        <div class="rule-ppm">min / stop &gt;3</div>
+      </div>
+    </div>
+    <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
+      <div>
+        <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Pharmacy</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">gate net &ge; $22/hr &nbsp;&middot;&nbsp; +3 min time pad</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="rule-min">+3</div>
+        <div class="rule-ppm">min pad</div>
       </div>
     </div>
     <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
       <div>
         <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Shop+Pharmacy</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px;">$14 floor, scales with items &nbsp;&middot;&nbsp; no time pad (runs under est)</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">gate net &ge; $22/hr &nbsp;&middot;&nbsp; no time pad (runs under est)</div>
       </div>
       <div style="text-align:right;">
-        <div class="rule-min">$14+</div>
-        <div class="rule-ppm">&gt;$2.50/mi</div>
+        <div class="rule-min">0</div>
+        <div class="rule-ppm">min pad</div>
       </div>
     </div>
     <div class="rule-chip" style="grid-column:1/-1;background:var(--surface2);">
       <div>
         <div class="rule-dist" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;">DD / UE &mdash; filler only</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px;">accepts as FILLER: &ge;$20/hr &nbsp;&middot;&nbsp; &le;25min &nbsp;&middot;&nbsp; &ge;$2.00/mi</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;">accepts as FILLER: &ge;$15/hr &nbsp;&middot;&nbsp; &le;25min &nbsp;&middot;&nbsp; no PPM floor</div>
       </div>
       <div style="text-align:right;">
         <div class="rule-min" style="color:var(--blue);">FILL</div>
@@ -983,6 +1026,15 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
         <option value="Other">Other</option>
       </select>
     </div>
+    <div class="edit-fcfs-row">
+      <div class="fcfs-label">Source: &nbsp;<strong id="editFcfsLabel">Offer Ping</strong></div>
+      <div>
+        <span style="font-size:10px;color:var(--muted);margin-right:8px;">FCFS Board</span>
+        <div class="fcfs-toggle" id="editFcfsToggle" onclick="toggleEditFCFS()">
+          <div class="fcfs-knob"></div>
+        </div>
+      </div>
+    </div>
     <div class="modal-btn-row">
       <button class="modal-btn modal-btn-cancel" onclick="closeEditModal()">Cancel</button>
       <button class="modal-btn modal-btn-save" onclick="saveEdit()">Save</button>
@@ -993,17 +1045,17 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 
 <script>
 var gas = 0.224;
-// === TUNABLE: DD/UE filler branch net/hr floor. Revisit after ~30 shifts. Can drop toward ~15 for more volume. ===
-var DDUE_FILLER_MIN_HR = 20;
+// === TUNABLE: DD/UE filler branch net/hr floor. Provisional 15 (was 20): DD fills idle only, so a quick (<=25min) $5-6 net run beats $0 idle. Monitor -- small risk of missing a Spark ping mid-run. ===
+var DDUE_FILLER_MIN_HR = 15;
 var DDUE_FILLER_MAX_MIN = 25;   // hard cap on est time -- do not relax
-var DDUE_FILLER_MIN_PPM = 2.0;
+var DDUE_FILLER_MIN_PPM = 1.0;  // inert backstop (was 2.0). PPM floor removed -- net/hr + time cap are the real gate.
 // === Long-run penalty: est over this many min -> divide pay by penalty min for displayed net/hr ===
 var LONGRUN_THRESHOLD_MIN = 70;
 var LONGRUN_PENALTY_MIN = 120;
-// === Phase 3 Spark verdict bands (tunable). Net/hr drives the verdict; PPM is the gas-safety guard. ===
-var SPARK_ACCEPT_HR = 22;   // >= this and gas-safe -> ACCEPT
-var SPARK_MARGINAL_HR = 15; // >= this (and < accept) and gas-safe -> MARGINAL; below -> DECLINE
-var SPARK_GAS_PPM = 2.0;    // gas-safety floor: PPM must clear this AND net must be positive
+// === Phase 3 Spark verdict bands (tunable). Net/hr drives the verdict. PPM floor removed -- time value is the gate; net/hr >= 22 already clears all-in cost. ===
+var SPARK_ACCEPT_HR = 22;   // >= this and net-positive -> ACCEPT
+var SPARK_MARGINAL_HR = 15; // >= this (and < accept) and net-positive -> MARGINAL; below -> DECLINE
+var SPARK_GAS_PPM = 1.0;    // inert sanity backstop (was 2.0). Net-positive is the real "not losing money" guard; the 2.0 floor caught 0 losers and killed ~12% of profitable, time-efficient runs.
 var HARD_DECLINE_MIN = 75;  // adjusted (buffered) time >= this -> hard DECLINE override
 var gasSource = 'tap to update';
 var platform = 'Spark Shop';
@@ -1289,7 +1341,7 @@ function getTieredBuffer(estMin) {
 // Shop+Pharmacy: no buffer (runs under estimate -- do not pad).
 // Pharmacy: modest fixed buffer.
 // DD/UE: 0 (already uses actual-time averages).
-function getTimeBuffer(estMin, platform, items) {
+function getTimeBuffer(estMin, platform, items, stops) {
   if (platform === 'DD/UE') return 0;
   if (platform === 'Shop+Pharmacy') return 0;   // runs under estimate -- do not pad (retune later)
   if (platform === 'Pharmacy') return 3;
@@ -1301,7 +1353,14 @@ function getTimeBuffer(estMin, platform, items) {
     }
     return getTieredBuffer(estMin);      // fallback when item count unknown
   }
-  if (platform === 'Curbside') return getTieredBuffer(estMin);
+  if (platform === 'Curbside') {
+    // Provisional stop-based buffer: batched Curbside, ~3.7 min/stop; est under-counts 5+ stop batches.
+    // max(0,(stops-3)*4) when stops known; est-tier fallback when stop count isn't shown at offer time.
+    if (!isNaN(stops) && stops > 0) {
+      return Math.max(0, (stops - 3) * 4);
+    }
+    return getTieredBuffer(estMin);      // fallback when stop count unknown
+  }
   return getTieredBuffer(estMin);
 }
 
@@ -1426,6 +1485,25 @@ function applyFCFSUI() {
   var t = document.getElementById('fcfsToggle');
   var l = document.getElementById('fcfsLabel');
   if (isFCFS) {
+    t.classList.add('on');
+    l.textContent = 'FCFS Board';
+    l.style.color = 'var(--amber)';
+  } else {
+    t.classList.remove('on');
+    l.textContent = 'Offer Ping';
+    l.style.color = '';
+  }
+}
+
+function toggleEditFCFS() {
+  editFCFS = !editFCFS;
+  applyEditFCFSUI();
+}
+
+function applyEditFCFSUI() {
+  var t = document.getElementById('editFcfsToggle');
+  var l = document.getElementById('editFcfsLabel');
+  if (editFCFS) {
     t.classList.add('on');
     l.textContent = 'FCFS Board';
     l.style.color = 'var(--amber)';
@@ -1905,6 +1983,7 @@ function exportCSV() {
 }
 
 var editIndex = -1;
+var editFCFS = false;
 var deleteConfirmPending = false;
 
 function openEditModal(i) {
@@ -1917,7 +1996,9 @@ function openEditModal(i) {
   document.getElementById('editStops').value    = (e.stops === undefined || e.stops === '') ? '' : e.stops;
   document.getElementById('editItems').value    = (e.items === undefined || e.items === '') ? '' : e.items;
   document.getElementById('editPlatform').value = e.platform;
-  document.getElementById('editModalMeta').textContent = e.date + '  -  ' + e.time + (e.fcfs ? '  -  FCFS' : '  -  Ping');
+  document.getElementById('editModalMeta').textContent = e.date + '  -  ' + e.time;
+  editFCFS = !!e.fcfs;
+  applyEditFCFSUI();
   onEditPlatformChange();
   var dBtn = document.getElementById('deleteBtn');
   dBtn.textContent = 'Delete Entry';
@@ -1961,7 +2042,8 @@ function saveEdit() {
     ? newTimeRaw
     : (isDDUE ? getDDUETime(newMiles) : 30);
   var itemsForBuffer = (newPlatform === 'Spark Shop' && !isNaN(newItemsRaw)) ? newItemsRaw : NaN;
-  var buffer = getTimeBuffer(estMin, newPlatform, itemsForBuffer);
+  var stopsForBuffer = (newPlatform === 'Curbside' && !isNaN(newStopsRaw)) ? newStopsRaw : NaN;
+  var buffer = getTimeBuffer(estMin, newPlatform, itemsForBuffer, stopsForBuffer);
   var netHrMin = getNetHrMinutes(estMin, buffer, isDDUE);
 
   var travelMi = e.travelMiles || 0;
@@ -2002,6 +2084,7 @@ function saveEdit() {
   e.net        = net;
   e.netHr      = netHr;
   e.verdict    = vWord;
+  e.fcfs       = editFCFS;
   e.acceptAt   = showThresh ? acceptAt : null;
   // Stops/items only apply to Shop, Curbside, and Shop+Pharmacy
   if (newPlatform === 'Spark Shop' || newPlatform === 'Curbside' || newPlatform === 'Shop+Pharmacy') {
@@ -2064,8 +2147,12 @@ function analyze() {
   var itemsRaw = parseInt(document.getElementById('inItems').value, 10);
   var itemsForBuffer = (platform === 'Spark Shop' && !isNaN(itemsRaw)) ? itemsRaw : NaN;
 
+  // Stop count for Curbside buffer (only Curbside uses stop-aware buffer)
+  var stopsRawForBuffer = parseInt(document.getElementById('inStops').value, 10);
+  var stopsForBuffer = (platform === 'Curbside' && !isNaN(stopsRawForBuffer)) ? stopsRawForBuffer : NaN;
+
   // Apply order-type / item-aware buffer
-  var buffer    = getTimeBuffer(estMin, platform, itemsForBuffer);
+  var buffer    = getTimeBuffer(estMin, platform, itemsForBuffer, stopsForBuffer);
   var realisticMin = estMin + buffer;
 
   // Net/hr time applies long-run penalty on BUFFERED time (Spark only)
@@ -2161,7 +2248,7 @@ function analyze() {
   var ppmEl = document.getElementById('sPPM');
   ppmEl.textContent = '$' + ppm.toFixed(2);
   ppmEl.className = 'stat-value ' + (ppm >= 2.5 ? 'green' : ppm >= SPARK_GAS_PPM ? 'amber' : 'red');
-  document.getElementById('sPPMsub').textContent = 'gas floor: $' + SPARK_GAS_PPM.toFixed(2) + '/mi' + (travelMiles > 0 ? ' w/ travel' : '');
+  document.getElementById('sPPMsub').textContent = 'no PPM floor' + (travelMiles > 0 ? ' (incl travel)' : '');
 
   var netEl = document.getElementById('sNet');
   netEl.textContent = '$' + net.toFixed(2);
