@@ -1,6 +1,138 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.16
+  RunCheck v1.22
+  v1.22: CAPTURE MODE REMOVED -- capture is now driven by the log's Accepted state.
+         The capture toggle was a SECOND source of truth for a fact the app already had. You
+         tell it you took the run (verdict auto-accepts, or you tap Accepted in the log); the
+         toggle then asked you to say so again, in a different place, at a different time.
+         Every capture bug in v1.18-v1.21 came from the two disagreeing:
+           v1.20 - `captured` frozen at accept time orphaned runs armed afterwards
+           v1.21 - auto-disarm + frozen flag made capture single-use; the bar never returned
+         Neither bug is possible now: there is nothing to arm, nothing to remember, nothing to
+         get out of sync. An accepted, un-closed run IS in flight, by definition.
+           accepted + not closed        -> in the bar (Started -> Delivered -> B/N)
+           B or N tapped (DD: Delivered)-> closed, leaves the bar
+           toggled Un-accepted          -> leaves the bar; STAMPS ARE KEPT, never destroyed
+           toggled back to Accepted     -> returns at whatever step it was on
+         Removed: captureMode, rch_capture_mode, toggleCapture, adoptCurrentRun, disarmIfIdle,
+         the `captured` field, and the shift-bar toggle. toggleAccept now calls renderAll() --
+         Accepted is the in-flight signal, so it must refresh the bar and not just the log.
+         MAX_INFLIGHT (3) caps the bar; `captured` used to keep un-stamped runs out, and
+         without it every accepted run of the day would qualify. Realistic concurrency is
+         1 Spark + 1 DD. Overflow is REPORTED in the bar ("+2 older unstamped"), not silently
+         swallowed, and the newest are kept since those are the live ones. Per-run x dismiss
+         still closes a run without inventing timestamps.
+  v1.21: CAPTURE BAR NEVER APPEARED (regression from v1.20). Two requested features collided:
+         `captured` is frozen at accept time (v1.20, so old un-stamped runs don't pile into
+         the bar), and capture disarms itself on run close (v1.18, by request). Sequence:
+         run 1 closes -> capture auto-disarms -> run 2 is accepted with capture OFF, so it is
+         stamped captured=false -> arming capture afterwards shows nothing, because the flag
+         was already frozen. Capture was single-use; the bar never came back, toggle on or off.
+         Fix: arming capture ADOPTS the newest still-open accepted run (adoptCurrentRun).
+         Drivers arm capture AFTER accepting -- you can't be expected to predict at check time
+         that you'll want to measure this one. Only the newest open run is adopted, so older
+         un-stamped runs stay out of the bar; legacy entries with no `captured` field adopt
+         correctly too. Arming with the newest run already closed adopts nothing.
+         LESSON: the v1.20 tests only ever armed capture BEFORE logging. Every test passed and
+         the feature was dead on the phone. Test suite now covers arm-after-accept, the full
+         close -> disarm -> re-arm sequence, and legacy entries.
+  v1.20: CONCURRENT RUNS. Runs overlap in real life -- you can be mid-DoorDash and accept a
+         Spark offer, with both in the air at once. activeRunIdx() returned only the MOST
+         RECENT accepted run, so the Spark accept stole the capture bar and orphaned the
+         in-flight DD: no way to stamp its Delivered, so its work time was never recorded and
+         the gap it filled scored as IDLE -- silently dragging realized $/hr down. Fixed:
+         - openRunIdxs() returns EVERY open run; the bar renders one labelled block per run
+           ($pay + platform + time) so the wrong run cannot be stamped by accident.
+         - Bar visibility is NO LONGER gated on captureMode. A run already being captured
+           must stay closable after capture disarms, or its stamps are stranded.
+         - New `captured` flag freezes whether capture was armed at accept time -- without it
+           every un-stamped accepted run of the day would pile into the bar.
+         - disarmIfIdle(): capture only disarms when NOTHING is in flight. Disarming mid-run
+           would stop the next accept from being captured while still working the current one.
+         - Stacked auto-close now targets the last open DELIVERED Spark specifically. A DD in
+           flight is never closed by a Spark accept (DD closes on Delivered only).
+         - Per-run dismiss (x) closes a run whose taps were missed WITHOUT inventing
+           timestamps. Fix it properly in the edit modal.
+         JUDGMENT CALL: a delivered-but-unclosed Spark is auto-closed 'N' by ANY next accept,
+         including a DoorDash (per spec: "next accept before Back tap"). Defensible -- the
+         return leg did feed a pickup, and leaving it open would inflate returnMin with the
+         whole DD run. But it means DD-chained and Spark-chained returns both land as 'N'.
+         If the analysis chat needs those separated, a 'D' kind can be derived with no extra
+         taps -- flagged, not built, since downstream CSV expects B/N only.
+  v1.19: Layout + Phase D scoping.
+         (1) FCFS moved into the 4th slot of the platform grid's 2nd row -- beside Other,
+             directly under Pharmacy -- filling the empty cell the 7 order-type buttons left
+             in the 4x2 grid. Reclaims the standalone fcfs-row's vertical space. Labels
+             shortened to Ping / FCFS (the cell is ~78px on a 390px phone; "Offer Ping" would
+             clip). Styled bordered-amber when on, never filled, so it cannot be misread as a
+             selected order type -- FCFS is orthogonal to platform.
+         (2) READY AT NOW ONLY SHOWS FOR CURBSIDE / PHARMACY / SHOP+PHARMACY. Those are the
+             only types with a knowable later start: pharmacy open hours, Shop+Pharmacy
+             inheriting them, Curbside scheduled slots. Spark Shop, DD/UE, Customer Return
+             and Other are ready now by definition -- the box could only ever be wrong there.
+             Hidden AND cleared on switch, and the verdict path re-checks canHaveWait() rather
+             than trusting the field, so a time typed under Pharmacy can never silently price
+             a Spark Shop run. Same gate in the edit modal.
+  v1.18: Field fixes from first on-phone test of v1.17.
+         (1) END SHIFT DID NOTHING ON THE PHONE. toggleShift used native confirm(); iOS
+             suppresses repeated dialogs and blocks them outright in home-screen/standalone
+             mode, where confirm() returns false and the tap silently no-ops. The rest of
+             this app never used confirm() -- Delete Entry confirms via a two-tap pending
+             button. Shift End now uses that same idiom (TAP AGAIN TO END, self-cancels in
+             4s). toggleBreak's alert() replaced with an inline note for the same reason.
+             DO NOT reintroduce confirm()/alert() on any per-tap path in this app.
+         (2) SHIFTS ARE NOW A LIST. shift.blocks = [{start,stop,breaks}]. A day can be worked
+             in several stretches; ending a block never destroys it and starting again
+             appends. Realized $/shift-hour sums worked time across every block, so a split
+             shift scores as one honest day and the gap between blocks is off the clock.
+             Migrates the v1.17 single-block format automatically. CSV summary gains
+             `Shift Blocks`; Shift Start/Stop = first start / last stop.
+         (3) STARTED TAP ADDED (3 taps: Started -> Delivered -> B/N). acceptedAtMs is only
+             when CHECK was tapped -- sitting on an offer before accepting in Spark was
+             landing inside run time as phantom work. runMin is now deliveredAt - startedAt
+             (TRUE run time), and lagMin = startedAt - acceptedAt is captured separately.
+             Falls back to accept time when Started is missed, so nothing breaks.
+         (4) Capture DISARMS ITSELF on run close (B, N, or DD Delivered). Re-arm per run.
+         (5) Edit modal: Started/Delivered and Back/Ready At on 2-col rows, B/N full width.
+             v1.17 put two <input type=time> + a select in one 3-col row; time inputs have a
+             wide intrinsic min-width and shoved B/N off-screen once populated.
+  v1.17: Capture, item-overrun correction, Ready At. Phases A-D per build spec.
+         PHASE A -- realized $/hr. Cycle(N) = accept-to-accept gap between consecutive
+           accepted Spark runs, same day; gaps > CYCLE_BREAK_MIN (90) dropped as a missed
+           break. Real $/hr = netAfterGas / cycleMin * 60. Explicit Start Shift / End Shift
+           stamps (NEVER auto-stamped -- the app is open outside working hours and an
+           auto-stamp would invent a shift boundary). Realized net $/SHIFT-hour =
+           sum(net) / (stop - start - breakMin) * 60 -- this is the number that sees the
+           bookend dead time accept-to-accept math misses. Offers logged with no shift open
+           still log and still get a verdict; they are excluded from shift-hour math.
+         PHASE B -- two-tap return capture. Toggle (rch_capture_mode), default OFF. Active
+           accepted Spark run gets a sticky bar: Delivered, then Back-to-store ('B') or
+           Fed-next-pickup ('N'). Derives runMin / returnMin / idleMin / cycleMin. Break
+           Start / Break End stamps -- break min is reported separately and subtracted from
+           the shift denominator (a chosen break and a market drought are NOT the same
+           thing). DD/UE excluded from return capture but gets a Delivered tap so DD time
+           buckets as work, not idle. Stacked orders auto-close the prior run as 'N'.
+         PHASE C -- per-type item-overrun correction (n=561). adjustedEst = est +
+           overrun(orderType, items) from measured bucket means. REPLACES the v1.16
+           heuristic getTimeBuffer -- these are the same quantity measured properly, and
+           stacking them would double-pad. Bucket means, NOT a linear fit (a global fit
+           overpredicts Curbside badly; Shop+Pharmacy runs UNDER est).
+         PHASE D -- Ready At. Optional clock-time field on the check. If set,
+           waitMin = max(0, readyAt - now), committedMin = waitMin + adjustedEst, and the
+           wait feeds the net/hr denominator + shows on screen. Advisory only -- it prices
+           the wait, it does not auto-decline (whether a wait is dead depends on what else
+           is on offer, which the driver knows and the app does not).
+         Storage: rolling 14-day rch_log_history + Export All (RunCheck previously kept
+           only today + prev, so an un-exported shift was destroyed on rollover -- the
+           single biggest way this project lost its own data).
+         CSV: append-only. Summary line gains Shift Start, Shift Stop, Break Min, DD Work
+           Min, Realized Net $/Shift Hr. Per-offer gains Ready At, Wait Min, Adjusted Est,
+           Committed Min, Delivered At, Back At, Return Kind, Run Min, Return Min, Idle Min,
+           Cycle Min, Real Net Hr. No existing column reordered or renamed.
+         Hours Worked now auto-computes from the shift stamps, still editable as override.
+         NOT in this version (deliberately deferred): return time in the gate; any change to
+           SPARK_ACCEPT_HR (22); long-run trigger moved to adjusted est. Long-run penalty
+           still triggers on RAW est so Phase C cannot swing 60-70 band verdicts.
   v1.16: (1) Edit Offer modal gains an FCFS toggle -- a logged run's FCFS/Ping flag can
             now be corrected after the fact (prefilled from the entry, written back on
             save; cascades to the FCFS badge, summary counts, and CSV). Static FCFS/Ping
@@ -551,6 +683,25 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 .modal-btn-delete.confirm { background: var(--red); color: #000; }
 
 /* FCFS toggle row */
+.fcfs-toggle.mini {
+  width: 30px; height: 17px; border-radius: 9px;
+}
+.fcfs-toggle.mini .fcfs-knob { width: 12px; height: 12px; top: 2.5px; left: 2.5px; }
+.fcfs-toggle.mini.on .fcfs-knob { left: 15px; }
+/* FCFS lives in the 4th slot of the platform grid's 2nd row (beside Other, under Pharmacy).
+   Pill-shaped to match .platform-btn, but bordered-amber rather than filled when on, so it
+   never reads as a selected order type -- FCFS is orthogonal to platform. */
+.fcfs-cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  cursor: pointer; padding: 8px 6px;
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.fcfs-cell.on { border-color: var(--amber); color: var(--amber); }
 .fcfs-row {
   margin: 10px 20px 0;
   background: var(--surface);
@@ -706,6 +857,14 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">accepted offer pay (double-check vs earned)</span>
       <span id="lsAcceptedTotal" style="font-size:16px;font-weight:bold;color:var(--green);">$0.00</span>
     </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:8px 12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">realized net $/hr (accept-to-accept, Spark only)</span>
+      <span id="lsRealHr" style="font-size:16px;font-weight:bold;color:var(--amber);">--</span>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:8px 12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">realized net $/shift-hour (incl. bookends + idle)</span>
+      <span id="lsShiftRealHr" style="font-size:16px;font-weight:bold;color:var(--amber);">--</span>
+    </div>
     <div id="logList"><div class="empty">No offers logged today</div></div>
   </div>
   <div class="log-pane" id="lpane-accepted">
@@ -731,6 +890,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">accepted offer pay</span>
       <span id="lsPrevAcceptedTotal" style="font-size:16px;font-weight:bold;color:var(--green);">$0.00</span>
     </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:8px 12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">realized net $/hr (accept-to-accept, Spark only)</span>
+      <span id="lsPrevRealHr" style="font-size:16px;font-weight:bold;color:var(--amber);">--</span>
+    </div>
     <div id="prevLogList"><div class="empty">No previous log saved yet</div></div>
   </div>
   <div class="log-pane" id="lpane-export">
@@ -748,6 +911,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       <div style="display:flex;align-items:center;gap:8px;">
         <button onclick="adjustShiftHrs(-0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">-</button>
         <input type="number" inputmode="decimal" id="shiftHrsWorked" value="0" min="0" max="16" step="0.5"
+          oninput="hoursManual = true; renderExportSummary();"
           style="background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:28px;font-weight:bold;width:100%;text-align:center;-webkit-appearance:none;">
         <button onclick="adjustShiftHrs(0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">+</button>
       </div>
@@ -755,6 +919,8 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     </div>
     <button class="export-btn" id="exportBtn" onclick="exportCSV()">DOWNLOAD TODAY'S CSV</button>
     <div class="export-info">Downloads a CSV of all offers checked including hours worked.<br>Add to your weekly offer tracking workbook.</div>
+    <button class="export-btn" id="exportAllBtn" onclick="exportAllCSV()" style="margin-top:10px;background:var(--surface2);border:1.5px solid var(--blue);color:var(--blue);">EXPORT ALL (<span id="histCount">0</span> DAYS)</button>
+    <div class="export-info">Rolling <span id="histDays">14</span>-day archive, one file, day-by-day.<br>Still export after every shift -- this is a safety net, not a substitute.</div>
   </div>
 </div>
 
@@ -793,6 +959,13 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
 </div>
 
+<div class="inputs" id="readyRow" style="grid-template-columns:auto 1fr auto;padding-top:0;padding-bottom:6px;align-items:center;gap:10px;">
+  <label style="margin:0;font-size:11px;color:var(--muted);">Ready At</label>
+  <input type="time" id="inReady" oninput="clearResult();updateReadyNote()" style="background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:14px;padding:8px;width:100%;">
+  <button onclick="clearReady()" style="background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;text-decoration:underline;">clear</button>
+</div>
+<div id="readyNote" style="display:none;padding:0 20px 6px;font-size:10px;color:var(--amber);font-family:var(--mono);"></div>
+
 <div id="storeMenu" style="display:none;padding: 4px 20px 0;">
   <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;">
     <div id="storeButtons" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
@@ -814,20 +987,53 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <button class="platform-btn" data-pf="Shop+Pharmacy" onclick="selectPlatform('Shop+Pharmacy')">Shop+Pharm</button>
   <button class="platform-btn" data-pf="Customer Return" onclick="selectPlatform('Customer Return')">Return</button>
   <button class="platform-btn" data-pf="Other" onclick="selectPlatform('Other')">Other</button>
+  <div class="fcfs-cell" id="fcfsCell" onclick="toggleFCFS()" title="Offer Ping vs FCFS Board">
+    <span id="fcfsLabel">Ping</span>
+    <div class="fcfs-toggle mini" id="fcfsToggle"><div class="fcfs-knob"></div></div>
+  </div>
 </div>
 
 <div class="analyze-wrap">
   <button class="analyze-btn" onclick="analyze()">CHECK THIS RUN &gt;&gt;</button>
 </div>
 
-<div class="fcfs-row">
-  <div class="fcfs-label">Source: &nbsp;<strong id="fcfsLabel">Offer Ping</strong></div>
-  <div>
-    <span style="font-size:10px;color:var(--muted);margin-right:8px;">FCFS Board</span>
-    <div class="fcfs-toggle" id="fcfsToggle" onclick="toggleFCFS()">
-      <div class="fcfs-knob"></div>
+<div class="pace-bar" id="shiftBar">
+  <div class="pace-top">
+    <span class="pace-title">shift &nbsp;<span id="shiftWindow" style="color:var(--muted);font-weight:normal;">not started</span></span>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
+    <button id="shiftBtn" onclick="toggleShift()" style="background:var(--green-dim);border:1.5px solid var(--green);color:var(--green);font-family:var(--mono);font-size:12px;font-weight:bold;padding:10px;border-radius:8px;cursor:pointer;">START SHIFT</button>
+    <button id="breakBtn" onclick="toggleBreak()" style="background:var(--surface2);border:1.5px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:12px;font-weight:bold;padding:10px;border-radius:8px;cursor:pointer;">BREAK START</button>
+  </div>
+  <div id="undoEndRow" style="display:none;text-align:center;margin-top:6px;">
+    <button onclick="undoEndShift()" style="background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;text-decoration:underline;">undo end -- reopen this shift</button>
+  </div>
+  <div class="pace-stats" style="margin-top:10px;">
+    <div class="pace-stat">
+      <div class="pace-stat-val" id="shRealHr" style="color:var(--amber);">--</div>
+      <div class="pace-stat-lbl">real $/shift-hr</div>
+    </div>
+    <div class="pace-stat">
+      <div class="pace-stat-val" id="shWorked" style="color:var(--text);">--</div>
+      <div class="pace-stat-lbl">worked</div>
+    </div>
+    <div class="pace-stat">
+      <div class="pace-stat-val" id="shBreak" style="color:var(--muted);">0m</div>
+      <div class="pace-stat-lbl">break</div>
+    </div>
+    <div class="pace-stat">
+      <div class="pace-stat-val" id="shDD" style="color:var(--muted);">0m</div>
+      <div class="pace-stat-lbl">DD work</div>
     </div>
   </div>
+  <div id="shiftNote" style="font-size:10px;color:var(--muted);margin-top:8px;text-align:center;">offers logged with no shift open still log and score -- they just sit outside shift-hour math</div>
+</div>
+
+<div class="pace-bar" id="captureBar" style="display:none;">
+  <div class="pace-top">
+    <span class="pace-title">in flight &nbsp;<span id="capRunLabel" style="color:var(--muted);font-weight:normal;"></span></span>
+  </div>
+  <div id="capButtons" style="margin-top:10px;"></div>
 </div>
 
 <div class="pace-bar" id="paceBar">
@@ -1014,6 +1220,37 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
         <input type="number" inputmode="numeric" id="editItems" step="1" min="0">
       </div>
     </div>
+    <!-- Two time inputs + a select will NOT fit on one phone row: <input type=time> has a wide
+         intrinsic min-width, so a 3-col grid squeezes the B/N select off-screen. Times share a
+         row, B/N gets its own full-width row. -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="modal-field" style="margin-bottom:0;">
+        <label>Started</label>
+        <input type="time" id="editStarted">
+      </div>
+      <div class="modal-field" style="margin-bottom:0;">
+        <label>Delivered</label>
+        <input type="time" id="editDelivered">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+      <div class="modal-field" style="margin-bottom:0;">
+        <label>Back</label>
+        <input type="time" id="editBack">
+      </div>
+      <div class="modal-field" id="editReadyWrap" style="margin-bottom:0;">
+        <label>Ready At</label>
+        <input type="time" id="editReady">
+      </div>
+    </div>
+    <div class="modal-field" style="margin-top:10px;margin-bottom:0;">
+      <label>Return Kind (B / N)</label>
+      <select id="editReturnKind" style="width:100%;">
+        <option value="">-- not set --</option>
+        <option value="B">B -- back to store / went idle</option>
+        <option value="N">N -- fed straight into next pickup</option>
+      </select>
+    </div>
     <div class="modal-field" style="margin-top:14px;">
       <label>Platform / Order Type</label>
       <select id="editPlatform" onchange="onEditPlatformChange()">
@@ -1057,6 +1294,27 @@ var SPARK_ACCEPT_HR = 22;   // >= this and net-positive -> ACCEPT
 var SPARK_MARGINAL_HR = 15; // >= this (and < accept) and net-positive -> MARGINAL; below -> DECLINE
 var SPARK_GAS_PPM = 1.0;    // inert sanity backstop (was 2.0). Net-positive is the real "not losing money" guard; the 2.0 floor caught 0 losers and killed ~12% of profitable, time-efficient runs.
 var HARD_DECLINE_MIN = 75;  // adjusted (buffered) time >= this -> hard DECLINE override
+// === Phase A -- gap between consecutive accepted-Spark accepts longer than this is a missed
+// break, not cycle time. With explicit break stamps this is a BACKSTOP, not the primary
+// mechanism -- prefer real break taps. ===
+var CYCLE_BREAK_MIN = 90;
+// === Phase C -- measured est-overrun bucket means (n=804 orders w/ actual time).
+// Bucket means, NOT a linear fit: a global fit (0.378*items - 1.68) overpredicts Curbside
+// badly (+14 predicted vs +7 actual on 07/14). Shop+Pharmacy genuinely runs UNDER est.
+// This REPLACES the v1.16 heuristic buffers -- same quantity, measured. Do not stack. ===
+var OVERRUN_GLOBAL_FALLBACK = 3;   // global mean, used when items unknown (n=804)
+// PHASE D: only these order types can have a known-later start. Pharmacy has open hours,
+// Shop+Pharmacy inherits them, Curbside has scheduled/reserved slots. A Spark Shop, DD/UE,
+// Customer Return or Other offer is ready now by definition -- showing Ready At there is a
+// box that can only ever be wrong.
+var READY_PLATFORMS = ['Curbside', 'Pharmacy', 'Shop+Pharmacy'];
+function canHaveWait(p) { return READY_PLATFORMS.indexOf(p) >= 0; }
+var HISTORY_DAYS = 14;             // rolling rch_log_history retention
+// v1.22: capture is driven by the log's Accepted state, so EVERY accepted un-closed run is in
+// flight. Cap the bar: realistic concurrency is 1 Spark + 1 DD. Past this you've stopped
+// tapping and the run isn't recoverable from the bar anyway -- fix it in Edit. Overflow is
+// reported in the bar, never silently swallowed.
+var MAX_INFLIGHT = 3;
 var gasSource = 'tap to update';
 var platform = 'Spark Shop';
 var hist = [];
@@ -1079,6 +1337,154 @@ try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch
 try { offerLog = JSON.parse(localStorage.getItem('rch_log') || '[]'); } catch(e) { offerLog = []; }
 try { prevLog = JSON.parse(localStorage.getItem('rch_log_prev') || '[]'); } catch(e) { prevLog = []; }
 try { prevDate = localStorage.getItem('rch_log_prev_date') || ''; } catch(e) { prevDate = ''; }
+
+// === PHASE A/B state ===
+// shift.blocks is a LIST -- a day can be worked in several separate stretches (morning, then
+// evening after a kid run). Each block: { start, stop, breaks:[{start,end}] }.
+// Ending a block never destroys it; starting again appends a new one. Realized $/shift-hour
+// sums worked time across every block, so a split shift scores as one honest day.
+// NEVER auto-stamped -- see header note.
+var shift = { date: '', blocks: [] };
+try {
+  var _s = JSON.parse(localStorage.getItem('rch_shift') || 'null');
+  if (_s && typeof _s === 'object') {
+    if (Array.isArray(_s.blocks)) {
+      shift.date = _s.date || '';
+      shift.blocks = _s.blocks;
+    } else if (_s.start) {
+      // migrate v1.17 single-block format
+      shift.date = _s.date || '';
+      shift.blocks = [{ start: _s.start, stop: _s.stop || null, breaks: Array.isArray(_s.breaks) ? _s.breaks : [] }];
+    }
+  }
+} catch(e) {}
+// Capture is no longer a separate armed/disarmed mode. It is LINKED TO THE LOG: an accepted,
+// un-closed run is in flight and gets a capture block. Toggle the run to Unaccepted and it
+// leaves the bar; toggle it back and it returns. See v1.22 header note.
+// Rolling multi-day history so an un-exported shift is not destroyed on rollover.
+var logHistory = [];
+try { logHistory = JSON.parse(localStorage.getItem('rch_log_history') || '[]'); } catch(e) { logHistory = []; }
+
+function saveShift() { try { localStorage.setItem('rch_shift', JSON.stringify(shift)); } catch(e) {} }
+function saveHistory() { try { localStorage.setItem('rch_log_history', JSON.stringify(logHistory)); } catch(e) {} }
+
+function hhmm(ms) {
+  if (!ms) return '';
+  return new Date(ms).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+// epoch ms -> "HH:MM" 24h, for <input type=time>
+function msToClock(ms) {
+  if (!ms) return '';
+  var d = new Date(ms);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+// "HH:MM" -> epoch ms, anchored to the given day (the run's own accept date, not today).
+// A stamp that lands before the anchor time is assumed to be past midnight on the next day.
+function parseClockToMs(str, anchorDate) {
+  if (!str) return null;
+  var parts = String(str).split(':');
+  if (parts.length < 2) return null;
+  var h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+  if (isNaN(h) || isNaN(m)) return null;
+  var a = anchorDate || new Date();
+  var d = new Date(a.getFullYear(), a.getMonth(), a.getDate(), h, m, 0, 0);
+  if (d.getTime() < a.getTime() - 12 * 3600000) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+function minBetween(a, b) { return (b - a) / 60000; }
+
+// The open block, or null if every block is closed / none exist.
+function curBlock() {
+  if (!shift.blocks.length) return null;
+  var b = shift.blocks[shift.blocks.length - 1];
+  return b.stop ? null : b;
+}
+function lastBlock() { return shift.blocks.length ? shift.blocks[shift.blocks.length - 1] : null; }
+function shiftIsOpen() { return !!curBlock(); }
+function shiftStarted() { return shift.blocks.length > 0; }
+function firstStart() { return shift.blocks.length ? shift.blocks[0].start : null; }
+
+function blockBreakMin(bl) {
+  var t = 0;
+  for (var j = 0; j < bl.breaks.length; j++) {
+    var b = bl.breaks[j];
+    if (!b.start) continue;
+    var end = b.end || Date.now();
+    if (end > b.start) t += minBetween(b.start, end);
+  }
+  return t;
+}
+// Total break minutes across every block (an open break counts up to now).
+function breakMinTotal() {
+  var t = 0;
+  for (var i = 0; i < shift.blocks.length; i++) t += blockBreakMin(shift.blocks[i]);
+  return t;
+}
+// Open break in the CURRENT block only -- you cannot be on a break inside a finished block.
+function openBreak() {
+  var bl = curBlock();
+  if (!bl) return null;
+  for (var j = 0; j < bl.breaks.length; j++) {
+    if (bl.breaks[j].start && !bl.breaks[j].end) return bl.breaks[j];
+  }
+  return null;
+}
+// Break minutes falling inside an arbitrary window, across all blocks -- used to strip chosen
+// breaks out of idle so a lunch and a market drought are not conflated.
+function breakMinIn(a, b) {
+  var t = 0;
+  for (var i = 0; i < shift.blocks.length; i++) {
+    var brs = shift.blocks[i].breaks;
+    for (var j = 0; j < brs.length; j++) {
+      var br = brs[j];
+      if (!br.start || !br.end) continue;
+      var s = Math.max(a, br.start), e = Math.min(b, br.end);
+      if (e > s) t += minBetween(s, e);
+    }
+  }
+  return t;
+}
+// DD work minutes inside a window. A DD run that fills a gap between two Spark accepts is
+// PRODUCTIVE time -- it must not be read as idle, and it must not inflate the Spark cycle
+// (that time earned DD money, not Spark money). Without this, a gap filled by DoorDash both
+// understates the realized rate and can trip the CYCLE_BREAK_MIN backstop, silently
+// discarding a perfectly good Spark cycle.
+function ddWorkMinIn(log, a, b) {
+  var t = 0;
+  for (var i = 0; i < log.length; i++) {
+    var e = log[i];
+    if (!e.accepted || e.platform !== 'DD/UE' || !e.acceptedAtMs || !e.deliveredAt) continue;
+    var from = e.startedAt || e.acceptedAtMs;
+    var s = Math.max(a, from), en = Math.min(b, e.deliveredAt);
+    if (en > s) t += minBetween(s, en);
+  }
+  return t;
+}
+function shiftIsOpenLegacy() { return shiftIsOpen(); }
+// Shift denominator: worked time summed across EVERY block, each minus its own breaks.
+// A split shift scores as one day; the gap between blocks is off the clock entirely.
+function shiftWorkedMin() {
+  var t = 0;
+  for (var i = 0; i < shift.blocks.length; i++) {
+    var bl = shift.blocks[i];
+    var end = bl.stop || Date.now();
+    var raw = minBetween(bl.start, end);
+    if (raw <= 0) continue;
+    t += Math.max(0, raw - blockBreakMin(bl));
+  }
+  return t;
+}
+// True if the timestamp falls inside ANY block. Offers logged between blocks (or with no shift
+// at all) still log and still score -- they just sit outside shift-hour math.
+function inShift(ms) {
+  if (!ms) return false;
+  for (var i = 0; i < shift.blocks.length; i++) {
+    var bl = shift.blocks[i];
+    var end = bl.stop || Date.now();
+    if (ms >= bl.start && ms <= end) return true;
+  }
+  return false;
+}
 
 if (fillups.length > 0) {
   gas = fillups[0].cpm;
@@ -1281,8 +1687,18 @@ function selectPlatform(name, keepResult) {
     t.removeAttribute('tabindex');
     t.style.color = '';
   }
+  // PHASE D: Ready At only exists where a wait is possible. Hidden AND cleared, so a stale
+  // time typed under Pharmacy can never silently price a Spark Shop run.
+  applyReadyVisibility();
   // Stops/items stay visible for all order types (capture-only for non-shop) -- no clearing
   if (!keepResult) clearResult();
+}
+
+function applyReadyVisibility() {
+  var show = canHaveWait(platform);
+  document.getElementById('readyRow').style.display = show ? '' : 'none';
+  if (!show) document.getElementById('inReady').value = '';
+  updateReadyNote();
 }
 
 function clearResult() {
@@ -1341,36 +1757,58 @@ function getTieredBuffer(estMin) {
 // Shop+Pharmacy: no buffer (runs under estimate -- do not pad).
 // Pharmacy: modest fixed buffer.
 // DD/UE: 0 (already uses actual-time averages).
+// PHASE C: measured est-overrun, per order type, bucketed on item count.
+// Item count predicts overrun (corr +0.52); miles barely (+0.15). Item count is visible at
+// decision time, which is what makes this actionable. Returns minutes to ADD to raw est.
+// NOTE: this replaced the v1.16 getTimeBuffer heuristic (0.4*items Shop / (stops-3)*4
+// Curbside / tiered fallbacks). Both estimate the same quantity -- keeping both would
+// double-pad. `stops` is retained in the signature for callers but no longer drives padding.
 function getTimeBuffer(estMin, platform, items, stops) {
-  if (platform === 'DD/UE') return 0;
-  if (platform === 'Shop+Pharmacy') return 0;   // runs under estimate -- do not pad (retune later)
-  if (platform === 'Pharmacy') return 3;
-  if (platform === 'Customer Return') return 5;   // +4.6 actual, 100% over
-  if (platform === 'Other') return getTieredBuffer(estMin);
+  if (platform === 'DD/UE') return 0;              // already uses actual-time averages
+  if (platform === 'Shop+Pharmacy') return -2;     // n=77, good -- genuinely runs UNDER est
+  if (platform === 'Pharmacy') return 3;           // n=29, moderate
+  if (platform === 'Customer Return') return 2;    // n=18, low
+  var haveItems = !isNaN(items) && items > 0;
   if (platform === 'Spark Shop') {
-    if (!isNaN(items) && items > 0) {
-      return Math.round(0.4 * items);   // item-aware: ~24 sec/item
-    }
-    return getTieredBuffer(estMin);      // fallback when item count unknown
+    if (!haveItems) return OVERRUN_GLOBAL_FALLBACK;
+    if (items <= 10) return 1;                     // n=231, high
+    if (items <= 25) return 4;                     // n=248, high
+    return 11;                                     // n=82, high
   }
   if (platform === 'Curbside') {
-    // Provisional stop-based buffer: batched Curbside, ~3.7 min/stop; est under-counts 5+ stop batches.
-    // max(0,(stops-3)*4) when stops known; est-tier fallback when stop count isn't shown at offer time.
-    if (!isNaN(stops) && stops > 0) {
-      return Math.max(0, (stops - 3) * 4);
-    }
-    return getTieredBuffer(estMin);      // fallback when stop count unknown
+    if (!haveItems) return OVERRUN_GLOBAL_FALLBACK;
+    if (items <= 25) return 3;                     // n~87, moderate
+    return 8;                                      // n=13, LOW confidence -- thin cell
   }
-  return getTieredBuffer(estMin);
+  return OVERRUN_GLOBAL_FALLBACK;                  // 'Other' / unknown
 }
 
-// Returns the time (min) for net/hr. Penalty checks BUFFERED time (Finding 4: buffer first, then penalty).
-function getNetHrMinutes(estMin, buffer, isDDUE) {
-  var bufferedMin = estMin + buffer;
-  if (!isDDUE && bufferedMin > LONGRUN_THRESHOLD_MIN) {
-    return LONGRUN_PENALTY_MIN;  // long-run trap: assume realistic 120 min
+// Returns the committed time (min) that drives net/hr.
+// PHASE C+D: base = adjustedEst (raw est + measured overrun), plus any Phase D scheduled wait.
+// LONG-RUN TRIGGER IS ON *RAW* EST, deliberately. v1.16 triggered on padded time; moving the
+// trigger onto the new adjusted est would newly push 60-70 band runs over the line and swing
+// verdicts hard on top of the Phase C change -- that's a compound change. Flagged for review
+// after a few shifts; not bundled here.
+function getNetHrMinutes(estMin, buffer, isDDUE, waitMin) {
+  var wait = waitMin || 0;
+  if (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN) {
+    return LONGRUN_PENALTY_MIN + wait;  // long-run trap: assume realistic 120 min, plus any scheduled wait
   }
-  return bufferedMin;
+  return (estMin + buffer) + wait;
+}
+// Phase D: minutes from now until a clock-time "Ready At" (HH:MM, 24h from <input type=time>).
+// Blank -> 0 -> committedMin == adjustedEst -> identical to pre-Phase-D behavior.
+// A ready time earlier than now means ready already; never negative.
+function getWaitMin(readyAtStr, fromDate) {
+  if (!readyAtStr) return 0;
+  var parts = String(readyAtStr).split(':');
+  if (parts.length < 2) return 0;
+  var h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+  if (isNaN(h) || isNaN(m)) return 0;
+  var base = fromDate || new Date();
+  var ready = new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m, 0, 0);
+  var diff = Math.round((ready.getTime() - base.getTime()) / 60000);
+  return diff > 0 ? diff : 0;
 }
 
 // Flags a likely capture glitch: implied speed too high for the platform.
@@ -1484,14 +1922,17 @@ function resetFCFS() {
 function applyFCFSUI() {
   var t = document.getElementById('fcfsToggle');
   var l = document.getElementById('fcfsLabel');
+  var c = document.getElementById('fcfsCell');
+  // Labels are short by necessity: the cell is one column of a 4-col grid (~78px on a 390px
+  // phone). "Offer Ping"/"FCFS Board" would wrap or clip.
   if (isFCFS) {
     t.classList.add('on');
-    l.textContent = 'FCFS Board';
-    l.style.color = 'var(--amber)';
+    c.classList.add('on');
+    l.textContent = 'FCFS';
   } else {
     t.classList.remove('on');
-    l.textContent = 'Offer Ping';
-    l.style.color = '';
+    c.classList.remove('on');
+    l.textContent = 'Ping';
   }
 }
 
@@ -1565,6 +2006,398 @@ function updateLogBadge() {
   document.getElementById('logBadgeSrc').textContent = accepted + ' accepted';
 }
 
+// === PHASE A + B -- derived metrics. Compute, never ask. ===
+// Run min    = deliveredAt - startedAt           (TRUE run time; falls back to accept if Started missed)
+// Lag min    = startedAt - acceptedAt            (checked the offer -> actually began driving)
+// Return min = backAt - deliveredAt              (Phase B tap)
+// Idle min   = acceptTime(N+1) - backAt          (minus any chosen break inside that window)
+// Cycle min  = acceptTime(N+1) - acceptedAt      (Phase A, zero-tap)
+// Spark primary only; DD/UE is excluded from return capture but its worked time is bucketed
+// separately as DD work so it cannot masquerade as idle.
+// Mutates the derived fields onto entries; recomputed on every render, so stale persisted
+// values are always overwritten.
+function computeRealized(log, useShift) {
+  var runs = [], i, e;
+  var ddWorkMin = 0;
+  for (i = 0; i < log.length; i++) {
+    e = log[i];
+    e.cycleMin = null; e.realHr = null; e.runMin = null; e.returnMin = null; e.idleMin = null; e.lagMin = null;
+    if (!e.accepted || !e.acceptedAtMs) continue;
+    if (e.startedAt && e.startedAt > e.acceptedAtMs) e.lagMin = minBetween(e.acceptedAtMs, e.startedAt);
+    var runFrom = e.startedAt || e.acceptedAtMs;
+    if (e.platform === 'DD/UE') {
+      // DD time is real working time. No Back tap, no B/N flag -- DD returns are not the question.
+      if (e.deliveredAt && e.deliveredAt > runFrom) {
+        e.runMin = minBetween(runFrom, e.deliveredAt);
+        ddWorkMin += e.runMin;
+      }
+      continue;
+    }
+    runs.push(e);
+  }
+  var sumNet = 0, sumCycle = 0;
+  for (i = 0; i < runs.length; i++) {
+    e = runs[i];
+    var rf = e.startedAt || e.acceptedAtMs;
+    if (e.deliveredAt && e.deliveredAt > rf) e.runMin = minBetween(rf, e.deliveredAt);
+    if (e.backAt && e.deliveredAt && e.backAt > e.deliveredAt) e.returnMin = minBetween(e.deliveredAt, e.backAt);
+    var nxt = runs[i + 1];
+    if (!nxt) continue;                 // last run of day: idle/cycle blank. Expected, not an error.
+    var gapMin = minBetween(e.acceptedAtMs, nxt.acceptedAtMs);
+    // CYCLE_BREAK_MIN is the backstop for a MISSED break tap. Real break stamps are preferred:
+    // strip stamped break time -- and any DD run that filled the gap -- out before judging it.
+    var stampedBreak = breakMinIn(e.acceptedAtMs, nxt.acceptedAtMs);
+    var ddIn = ddWorkMinIn(log, e.acceptedAtMs, nxt.acceptedAtMs);
+    var netGap = gapMin - stampedBreak - ddIn;
+    if (netGap <= 0 || netGap > CYCLE_BREAK_MIN) continue;
+    e.cycleMin = netGap;
+    e.realHr = (e.net || 0) / netGap * 60;
+    sumNet += (e.net || 0);
+    sumCycle += netGap;
+    if (e.backAt) {
+      var idle = minBetween(e.backAt, nxt.acceptedAtMs)
+               - breakMinIn(e.backAt, nxt.acceptedAtMs)
+               - ddWorkMinIn(log, e.backAt, nxt.acceptedAtMs);
+      e.idleMin = idle > 0 ? idle : 0;
+    }
+  }
+  // Accept-to-accept realized rate. Blind to bookend dead time by construction.
+  var cycleRealHr = sumCycle > 0 ? (sumNet / sumCycle * 60) : null;
+  // Realized net per SHIFT-hour. This is the number that sees the bookends -- on 07/14 the
+  // 87 min of bookend dead time sat outside every accept-to-accept window, and accept-to-accept
+  // reported ~15/hr against a reality of 11.7/hr.
+  var shiftRealHr = null, workedMin = 0, shiftNet = 0;
+  if (useShift && shiftStarted()) {
+    workedMin = shiftWorkedMin();
+    for (i = 0; i < log.length; i++) {
+      e = log[i];
+      if (e.accepted && inShift(e.acceptedAtMs)) shiftNet += (e.net || 0);
+    }
+    if (workedMin > 0) shiftRealHr = shiftNet / workedMin * 60;
+  }
+  return {
+    cycleRealHr: cycleRealHr,
+    shiftRealHr: shiftRealHr,
+    workedMin: workedMin,
+    shiftNet: shiftNet,
+    breakMin: breakMinTotal(),
+    ddWorkMin: ddWorkMin
+  };
+}
+
+// PHASE D. Blank Ready At = ready now = zero change to pre-Phase-D behavior.
+function clearReady() {
+  document.getElementById('inReady').value = '';
+  updateReadyNote();
+  clearResult();
+}
+function updateReadyNote() {
+  var note = document.getElementById('readyNote');
+  if (!canHaveWait(platform)) { note.style.display = 'none'; return; }
+  var w = getWaitMin(document.getElementById('inReady').value);
+  if (w > 0) {
+    note.style.display = 'block';
+    note.textContent = 'scheduled start in ' + w + ' min -- that wait is committed time and will be priced in';
+  } else {
+    note.style.display = 'none';
+  }
+}
+
+function todayKey() {
+  var n = new Date();
+  return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+}
+
+// The driver knows the real shift boundary -- leaving the house, and being done for the day.
+// Ask for it. Never infer it from app-open or first log entry.
+// NO native confirm() here. iOS suppresses repeated dialogs (and blocks them outright in
+// home-screen/standalone mode), where confirm() silently returns false and the tap does
+// nothing. The rest of this app already confirms via a two-tap pending button (Delete Entry) --
+// same idiom here. Ending is non-destructive now anyway: blocks are appended, never replaced.
+var shiftConfirmPending = false;
+var shiftPendingTimer = null;
+
+function clearShiftPending() {
+  shiftConfirmPending = false;
+  if (shiftPendingTimer) { clearTimeout(shiftPendingTimer); shiftPendingTimer = null; }
+}
+
+function toggleShift() {
+  var now = Date.now();
+  var bl = curBlock();
+  if (!bl) {
+    // Start a block. First of the day, or a new stretch after a gap -- both just append.
+    if (shift.date !== todayKey()) { shift.date = todayKey(); shift.blocks = []; }
+    shift.blocks.push({ start: now, stop: null, breaks: [] });
+    clearShiftPending();
+  } else {
+    if (!shiftConfirmPending) {
+      shiftConfirmPending = true;
+      renderShiftBar();
+      shiftPendingTimer = setTimeout(function() { clearShiftPending(); renderShiftBar(); }, 4000);
+      return;
+    }
+    var ob = openBreak();
+    if (ob) ob.end = now;   // an open break cannot outlive its block
+    bl.stop = now;
+    clearShiftPending();
+  }
+  saveShift();
+  renderAll();
+}
+
+// Recovers a mis-tapped End without destroying the block's stamps.
+function undoEndShift() {
+  var bl = lastBlock();
+  if (!bl || !bl.stop) return;
+  bl.stop = null;
+  saveShift();
+  renderAll();
+}
+
+// Drops the most recent block outright (mis-tapped Start).
+function dropLastBlock() {
+  if (!shift.blocks.length) return;
+  shift.blocks.pop();
+  clearShiftPending();
+  saveShift();
+  renderAll();
+}
+
+// A break happens every day (lunch, or driving a kid somewhere). Without this stamp a chosen
+// break and an offer drought are indistinguishable -- both are just a gap -- and that makes the
+// realized rate meaningless. Reported separately, never buried inside idle.
+function toggleBreak() {
+  var now = Date.now();
+  var ob = openBreak();
+  if (ob) {
+    ob.end = now;
+  } else {
+    var bl = curBlock();
+    // No alert() -- same dialog-suppression problem as confirm(). The note line says it instead.
+    if (!bl) {
+      var n = document.getElementById('shiftNote');
+      n.textContent = 'start the shift first -- break time is subtracted from shift hours';
+      n.style.color = 'var(--red)';
+      return;
+    }
+    bl.breaks.push({ start: now, end: null });
+  }
+  saveShift();
+  renderAll();
+}
+
+// A run closes on the Back tap (Spark) or Delivered (DD/UE -- no return leg to capture).
+// capDismissed closes it without inventing timestamps, for a run whose taps were missed.
+function isRunClosed(e) {
+  if (e.capDismissed) return true;
+  return e.platform === 'DD/UE' ? !!e.deliveredAt : !!e.backAt;
+}
+
+// RUNS OVERLAP IN REAL LIFE. You can be mid-DoorDash and accept a Spark offer -- both are in
+// flight at once, so this returns ALL open runs, not one "active" one.
+// IN FLIGHT == accepted AND not closed. That is the whole rule. The log's Accept toggle is the
+// single source of truth: accept a run and it appears here; un-accept it and it leaves.
+// No arming, no `captured` flag frozen at accept time, no auto-disarm -- every bug in v1.18
+// through v1.21 came from trying to track "am I measuring this one?" separately from "did I
+// take this one?". They were always the same question.
+function openRunIdxs() {
+  var out = allInflightIdxs();
+  // Capped so a day of un-stamped accepts can't bury the screen. Realistic concurrency is
+  // 1 Spark + 1 DD; past MAX_INFLIGHT you've stopped tapping and the run isn't recoverable
+  // from the bar anyway -- fix it in Edit.
+  return out.length > MAX_INFLIGHT ? out.slice(out.length - MAX_INFLIGHT) : out;
+}
+function allInflightIdxs() {
+  var out = [];
+  for (var i = 0; i < offerLog.length; i++) {
+    var e = offerLog[i];
+    if (!e.accepted || !e.acceptedAtMs) continue;
+    if (!isRunClosed(e)) out.push(i);
+  }
+  return out;
+}
+// Open runs beyond the cap -- surfaced in the bar, never silently swallowed.
+function hiddenInflightCount() { return Math.max(0, allInflightIdxs().length - MAX_INFLIGHT); }
+
+// Back-compat shim: most recent open run, or -1.
+function activeRunIdx() {
+  var o = openRunIdxs();
+  return o.length ? o[o.length - 1] : -1;
+}
+
+// Most recent open SPARK run that has been delivered but not closed -- the stacked-order case.
+function lastOpenDeliveredSparkIdx() {
+  var o = openRunIdxs();
+  for (var k = o.length - 1; k >= 0; k--) {
+    var e = offerLog[o[k]];
+    if (e.platform !== 'DD/UE' && e.deliveredAt && !e.backAt) return o[k];
+  }
+  return -1;
+}
+
+// Leaves the bar without fabricating stamps. Fix it properly in the edit modal.
+function dismissRun(i) {
+  offerLog[i].capDismissed = true;
+  saveOfferLog();
+  renderAll();
+}
+
+// STARTED: the real beginning of the run. acceptedAtMs is only when you tapped CHECK -- you may
+// sit on an offer before accepting it in Spark, and that lag was landing inside run time as
+// phantom work. With this tap, lag and run are separated and run time is finally true.
+function tapStarted(i) {
+  offerLog[i].startedAt = Date.now();
+  saveOfferLog();
+  renderAll();
+}
+function tapDelivered(i) {
+  offerLog[i].deliveredAt = Date.now();
+  // DD/UE has no return leg to capture, so Delivered closes it outright.
+  saveOfferLog();
+  renderAll();
+}
+// The B/N choice is baked into which button was tapped. No clock-reading, no math, no miles.
+// Tapping either closes the run: it leaves the bar and the return leg is now on record.
+function tapBack(i, kind) {
+  var e = offerLog[i];
+  if (!e.deliveredAt) e.deliveredAt = Date.now();   // missed Delivered tap: at least capture the pair
+  e.backAt = Date.now();
+  e.returnKind = kind;
+  saveOfferLog();
+  renderAll();
+}
+
+function renderShiftBar() {
+  var winEl = document.getElementById('shiftWindow');
+  var btn   = document.getElementById('shiftBtn');
+  var bbtn  = document.getElementById('breakBtn');
+  var ob    = openBreak();
+  var open  = curBlock();
+  // Window text lists every block: "7:56a-12:04p / 1:10p-open"
+  var parts = [];
+  for (var bi = 0; bi < shift.blocks.length; bi++) {
+    var b = shift.blocks[bi];
+    parts.push(hhmm(b.start) + '-' + (b.stop ? hhmm(b.stop) : 'open'));
+  }
+  if (!shift.blocks.length) {
+    winEl.textContent = 'not started';
+    btn.textContent = 'START SHIFT';
+    btn.style.background = 'var(--green-dim)'; btn.style.borderColor = 'var(--green)'; btn.style.color = 'var(--green)';
+  } else if (open) {
+    winEl.textContent = parts.join('  /  ');
+    if (shiftConfirmPending) {
+      btn.textContent = 'TAP AGAIN TO END';
+      btn.style.background = 'var(--red)'; btn.style.borderColor = 'var(--red)'; btn.style.color = '#000';
+    } else {
+      btn.textContent = 'END SHIFT';
+      btn.style.background = 'var(--surface2)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)';
+    }
+  } else {
+    winEl.textContent = parts.join('  /  ') + '  (ended)';
+    btn.textContent = 'START NEW BLOCK';
+    btn.style.background = 'var(--green-dim)'; btn.style.borderColor = 'var(--green)'; btn.style.color = 'var(--green)';
+  }
+  var lb = lastBlock();
+  document.getElementById('undoEndRow').style.display = (lb && lb.stop) ? 'block' : 'none';
+  if (ob) {
+    bbtn.textContent = 'BREAK END';
+    bbtn.style.borderColor = 'var(--amber)'; bbtn.style.color = 'var(--amber)';
+  } else {
+    bbtn.textContent = 'BREAK START';
+    bbtn.style.borderColor = 'var(--border)'; bbtn.style.color = 'var(--muted)';
+  }
+  var r = computeRealized(offerLog, true);
+  var rEl = document.getElementById('shRealHr');
+  rEl.textContent = r.shiftRealHr == null ? '--' : '$' + r.shiftRealHr.toFixed(0);
+  rEl.className = 'pace-stat-val';
+  rEl.style.color = r.shiftRealHr == null ? 'var(--muted)'
+    : (r.shiftRealHr >= SPARK_ACCEPT_HR ? 'var(--green)' : r.shiftRealHr >= SPARK_MARGINAL_HR ? 'var(--amber)' : 'var(--red)');
+  document.getElementById('shWorked').textContent = r.workedMin > 0 ? (r.workedMin / 60).toFixed(1) + 'h' : '--';
+  document.getElementById('shBreak').textContent  = Math.round(r.breakMin) + 'm';
+  document.getElementById('shDD').textContent     = Math.round(r.ddWorkMin) + 'm';
+  var note = document.getElementById('shiftNote');
+  if (shiftConfirmPending) {
+    note.textContent = 'tap END again to confirm -- cancels itself in a few seconds';
+    note.style.color = 'var(--red)';
+  } else if (ob) {
+    note.textContent = 'on break since ' + hhmm(ob.start) + ' -- not counted as shift time or idle';
+    note.style.color = 'var(--amber)';
+  } else if (!shift.blocks.length) {
+    note.textContent = 'offers logged with no shift open still log and score -- they just sit outside shift-hour math';
+    note.style.color = 'var(--muted)';
+  } else if (!curBlock()) {
+    note.textContent = shift.blocks.length + ' block' + (shift.blocks.length > 1 ? 's' : '') + ' today -- starting again adds a block, it does not replace this one';
+    note.style.color = 'var(--muted)';
+  } else {
+    note.textContent = 'real $/shift-hr counts bookends: shift start -> first accept, last drop -> shift end';
+    note.style.color = 'var(--muted)';
+  }
+}
+
+function renderCaptureBar() {
+  var bar = document.getElementById('captureBar');
+  var open = openRunIdxs();
+  // Visible whenever ANY run is in flight. No mode to arm, nothing to remember.
+  if (!open.length) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  var hidden = hiddenInflightCount();
+  var lbl = open.length > 1 ? open.length + ' runs in flight' : '';
+  if (hidden > 0) lbl += (lbl ? ' -- ' : '') + '+' + hidden + ' older unstamped (fix in Edit)';
+  document.getElementById('capRunLabel').textContent = lbl;
+  var box = document.getElementById('capButtons');
+  var html = '';
+  for (var k = 0; k < open.length; k++) html += capBlock(open[k], open.length > 1);
+  box.innerHTML = html;
+}
+
+// One capture block per in-flight run. When several are open each is labelled with its own
+// pay/platform so the wrong run cannot be stamped by accident.
+function capBlock(i, multi) {
+  var e = offerLog[i];
+  var bs = 'font-family:var(--mono);font-size:12px;font-weight:bold;padding:12px;border-radius:8px;cursor:pointer;width:100%;';
+  var head = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+    '<span style="font-size:11px;color:var(--text);font-family:var(--mono);">$' + e.pay.toFixed(2) + ' ' + e.platform + ' &middot; ' + e.time + '</span>' +
+    '<button onclick="dismissRun(' + i + ')" style="background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:0 4px;" title="drop from bar without stamping">&times;</button>' +
+    '</div>';
+  var body;
+  if (!e.startedAt) {
+    body = '<div style="font-size:10px;color:var(--muted);margin-bottom:6px;">tap when you actually start the run</div>' +
+      '<button onclick="tapStarted(' + i + ')" style="' + bs + 'background:var(--surface2);border:1.5px solid var(--amber);color:var(--amber);">STARTED</button>';
+  } else if (!e.deliveredAt) {
+    body = '<div style="font-size:10px;color:var(--muted);margin-bottom:6px;">started ' + hhmm(e.startedAt) + '</div>' +
+      '<button onclick="tapDelivered(' + i + ')" style="' + bs + 'background:var(--green-dim);border:1.5px solid var(--green);color:var(--green);">DELIVERED</button>';
+  } else {
+    body = '<div style="font-size:10px;color:var(--muted);margin-bottom:6px;">delivered ' + hhmm(e.deliveredAt) + ' -- where did you end up?</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
+      '<button onclick="tapBack(' + i + ',\'B\')" style="' + bs + 'background:var(--surface2);border:1.5px solid var(--blue);color:var(--blue);">BACK TO STORE / IDLE</button>' +
+      '<button onclick="tapBack(' + i + ',\'N\')" style="' + bs + 'background:var(--surface2);border:1.5px solid var(--amber);color:var(--amber);">FED NEXT PICKUP</button>' +
+      '</div>';
+  }
+  var wrap = multi ? 'border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;' : '';
+  return '<div style="' + wrap + '">' + head + body + '</div>';
+}
+
+function renderAll() {
+  renderShiftBar();
+  renderCaptureBar();
+  renderLog();
+  updateLogBadge();
+}
+
+// Capture detail line: only renders what was actually stamped. Missing taps just render nothing --
+// the minimum useful pair is delivered + back, which IS the return leg.
+function capRow(e) {
+  var bits = [];
+  if (e.waitMin) bits.push('wait ' + Math.round(e.waitMin) + 'm');
+  if (e.lagMin != null && e.lagMin >= 1) bits.push('lag ' + Math.round(e.lagMin) + 'm');
+  if (e.runMin != null) bits.push('run ' + Math.round(e.runMin) + 'm');
+  if (e.returnMin != null) bits.push('return ' + Math.round(e.returnMin) + 'm' + (e.returnKind ? ' (' + e.returnKind + ')' : ''));
+  if (e.idleMin != null) bits.push('idle ' + Math.round(e.idleMin) + 'm');
+  if (!bits.length) return '';
+  return '<div style="font-size:10px;color:var(--blue);margin-top:3px;font-family:var(--mono);">' + bits.join(' &nbsp;/&nbsp; ') + '</div>';
+}
+
 function renderLog() {
   var el = document.getElementById('logList');
   var pings    = offerLog.filter(function(e) { return !e.fcfs; }).length;
@@ -1575,6 +2408,11 @@ function renderLog() {
   document.getElementById('lsFCFS').textContent     = fcfs;
   var acceptedPay = offerLog.reduce(function(s, e) { return s + (e.accepted ? (e.pay || 0) : 0); }, 0);
   document.getElementById('lsAcceptedTotal').textContent = '$' + acceptedPay.toFixed(2);
+  var realized = computeRealized(offerLog, true);
+  var realEl = document.getElementById('lsRealHr');
+  if (realEl) realEl.textContent = realized.cycleRealHr == null ? '--' : '$' + realized.cycleRealHr.toFixed(0) + '/hr';
+  var shEl = document.getElementById('lsShiftRealHr');
+  if (shEl) shEl.textContent = realized.shiftRealHr == null ? '--' : '$' + realized.shiftRealHr.toFixed(0) + '/hr';
   if (!offerLog.length) { el.innerHTML = '<div class="empty">No offers logged today</div>'; return; }
   var html = '';
   // Reverse iteration -- most recent first
@@ -1605,7 +2443,8 @@ function renderLog() {
         '</div>' +
         '<span class="log-entry-verdict ' + vcls + '">' + e.verdict + '</span>' +
       '</div>' +
-      '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; $' + e.netHr.toFixed(0) + '/hr</div>' +
+      '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; est $' + e.netHr.toFixed(0) + '/hr' + (e.realHr != null ? ' &nbsp;|&nbsp; real ~$' + e.realHr.toFixed(0) + '/hr' : '') + '</div>' +
+      capRow(e) +
       threshold +
       '<div class="log-btn-row">' +
         '<button class="' + btnCls + '" onclick="toggleAccept(' + idx + ')">' + btnTxt + '</button>' +
@@ -1628,6 +2467,10 @@ function renderPrevLog() {
   document.getElementById('lsPrevFCFS').textContent     = fcfs;
   var prevAcceptedPay = prevLog.reduce(function(s, e) { return s + (e.accepted ? (e.pay || 0) : 0); }, 0);
   document.getElementById('lsPrevAcceptedTotal').textContent = '$' + prevAcceptedPay.toFixed(2);
+  // Prev day: shift stamps are not retained per-day, so only the accept-to-accept rate is shown.
+  var prevRealized = computeRealized(prevLog, false);
+  var prevRealEl = document.getElementById('lsPrevRealHr');
+  if (prevRealEl) prevRealEl.textContent = prevRealized.cycleRealHr == null ? '--' : '$' + prevRealized.cycleRealHr.toFixed(0) + '/hr';
   if (!prevLog.length) {
     lbl.textContent = 'no previous log saved yet';
     el.innerHTML = '<div class="empty">No previous log saved yet</div>';
@@ -1651,7 +2494,8 @@ function renderPrevLog() {
         '</div>' +
         '<span class="log-entry-verdict ' + vcls + '">' + e.verdict + '</span>' +
       '</div>' +
-      '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; $' + e.netHr.toFixed(0) + '/hr</div>' +
+      '<div class="log-entry-meta">' + e.platform + ' &nbsp;&middot;&nbsp; ' + e.time + ' &nbsp;&middot;&nbsp; $' + e.ppm.toFixed(2) + '/mi &nbsp;&middot;&nbsp; est $' + e.netHr.toFixed(0) + '/hr' + (e.realHr != null ? ' &nbsp;|&nbsp; real ~$' + e.realHr.toFixed(0) + '/hr' : '') + '</div>' +
+      capRow(e) +
       threshold +
     '</div>';
   }
@@ -1662,9 +2506,10 @@ function toggleAccept(i) {
   offerLog[i].accepted = !offerLog[i].accepted;
   // If now accepted, clear any decline reason (you took it)
   if (offerLog[i].accepted) offerLog[i].declineReason = '';
+  // Un-accepting KEEPS any stamps -- never destroy data on a toggle. The run just leaves the
+  // bar; toggle it back and it returns at whatever step it was on.
   saveOfferLog();
-  updateLogBadge();
-  renderLog();
+  renderAll();   // must refresh the capture bar too -- accepted IS the in-flight signal now
 }
 
 function setReason(i, reason) {
@@ -1871,11 +2716,16 @@ function saveActuals(idx) {
   renderAccepted();
 }
 
+// Hours Worked was a hand-entry. With shift stamps it auto-computes (stop - start - break)
+// and stays editable as an override -- one less thing to remember, and a number you can trust.
+var hoursManual = false;
+
 function adjustShiftHrs(delta) {
   var el = document.getElementById('shiftHrsWorked');
   var val = parseFloat(el.value) || 0;
   val = Math.max(0, Math.min(16, Math.round((val + delta) * 2) / 2));
   el.value = val;
+  hoursManual = true;
   renderExportSummary();
 }
 
@@ -1889,30 +2739,21 @@ function renderExportSummary() {
   document.getElementById('lsTotal2').textContent    = pings;
   document.getElementById('lsAccepted2').textContent = accepted;
   document.getElementById('lsDeclined2').textContent = total - accepted;
+  // Auto-fill from the shift stamps unless the driver has overridden it. Today only --
+  // prev-day shift stamps are not retained.
+  if (!hoursManual && exportDay === 'today' && shiftStarted()) {
+    var wm = shiftWorkedMin();
+    if (wm > 0) document.getElementById('shiftHrsWorked').value = (Math.round(wm / 3) / 20).toFixed(2);
+  }
   var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
   var oph = hrs > 0 ? (pings / hrs).toFixed(1) : '--';
   document.getElementById('offersPerHr').textContent = oph;
 }
 
-function exportCSV() {
-  var src = getActiveLog();
-  if (!src.length) {
-    alert(exportDay === 'prev' ? 'No previous day log saved.' : 'No offers logged today yet.');
-    return;
-  }
-  var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
-  var total    = src.length;
-  var accepted = src.filter(function(e) { return e.accepted; }).length;
-  var now = new Date();
-  var dateStr;
-  if (exportDay === 'prev' && prevDate) {
-    dateStr = prevDate;
-  } else {
-    var mm = String(now.getMonth() + 1).padStart(2, '0');
-    var dd = String(now.getDate()).padStart(2, '0');
-    dateStr = now.getFullYear() + '-' + mm + '-' + dd;
-  }
-
+// Builds one day's CSV block. Shared by the single-day export and the rolling archive so the
+// two can never drift apart. shiftSnap = that day's shift record, or null if unknown.
+function buildCsvFor(src, dateStr, shiftSnap, hrs) {
+  hrs = (hrs == null) ? '' : hrs;
   // RFC-4180 cell escaping. ROOT FIX for the merged-rows bug:
   // any embedded newline in a field is collapsed to a single space so it can
   // never be read as a row terminator. Commas/quotes get quoted + doubled.
@@ -1938,8 +2779,24 @@ function exportCSV() {
     var hasM  = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
     return s + (hasM ? money : (e.pay || 0));
   }, 0);
-  var summary = csvRow(['# Date', dateStr, 'Hours Worked', hrs, 'Offers', total, 'Accepted', accepted, 'Accepted Pay', acceptedPay.toFixed(2), 'Fare', fareSum.toFixed(2), 'Tip', tipSum.toFixed(2), 'Cash Tips', cashTips.toFixed(2), 'Earned', earnedSum.toFixed(2), 'Declined', (total - accepted)]);
-  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles','Actual Time','Actual Miles','Actual Items','Actual Fare','Actual Tip','Cash Tip','Actual Total','Actual Items A','Actual Items B'];
+  var total    = src.length;
+  var accepted = src.filter(function(e) { return e.accepted; }).length;
+  // Shift-level values are one-per-day and do not fit a per-offer row, so they ride the
+  // summary line. Downstream these belong on a new `Shifts` sheet, NOT All Offers.
+  // A day with no shift record (e.g. an older prev-day log) emits blanks -- not an error.
+  var R = withShift(shiftSnap, function() { return computeRealized(src, !!shiftSnap); });
+  // Split shift: Start = first block's start, Stop = last block's stop. Blocks column carries
+  // the full picture so a two-block day is not silently flattened into one long stretch.
+  var _bl = (shiftSnap && shiftSnap.blocks) ? shiftSnap.blocks : [];
+  var shStart = _bl.length ? hhmm(_bl[0].start) : '';
+  var shStop  = (_bl.length && _bl[_bl.length-1].stop) ? hhmm(_bl[_bl.length-1].stop) : '';
+  var shBlocks = _bl.map(function(b){ return hhmm(b.start) + '-' + (b.stop ? hhmm(b.stop) : 'open'); }).join(' | ');
+  var shBreak = shiftSnap ? Math.round(R.breakMin) : '';
+  var shDD    = shiftSnap ? Math.round(R.ddWorkMin) : '';
+  var shReal  = (shiftSnap && R.shiftRealHr != null) ? R.shiftRealHr.toFixed(2) : '';
+  var summary = csvRow(['# Date', dateStr, 'Hours Worked', hrs, 'Offers', total, 'Accepted', accepted, 'Accepted Pay', acceptedPay.toFixed(2), 'Fare', fareSum.toFixed(2), 'Tip', tipSum.toFixed(2), 'Cash Tips', cashTips.toFixed(2), 'Earned', earnedSum.toFixed(2), 'Declined', (total - accepted), 'Shift Start', shStart, 'Shift Stop', shStop, 'Break Min', shBreak, 'DD Work Min', shDD, 'Realized Net $/Shift Hr', shReal, 'Shift Blocks', shBlocks]);
+  // APPEND ONLY -- downstream parsing maps by position. Never reorder or rename.
+  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles','Actual Time','Actual Miles','Actual Items','Actual Fare','Actual Tip','Cash Tip','Actual Total','Actual Items A','Actual Items B','Ready At','Wait Min','Adjusted Est','Committed Min','Started At','Delivered At','Back At','Return Kind','Lag Min','Run Min','Return Min','Idle Min','Cycle Min','Real Net Hr'];
   var rows = src.map(function(e) {
     var hasM = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
     var actTotal = hasM ? ((parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0)).toFixed(2) : '';
@@ -1962,17 +2819,80 @@ function exportCSV() {
       (e.cashTip     === undefined || e.cashTip     === '' || e.cashTip     === null) ? '' : e.cashTip,
       actTotal,
       (e.actualItemsA === undefined || e.actualItemsA === '' || e.actualItemsA === null) ? '' : e.actualItemsA,
-      (e.actualItemsB === undefined || e.actualItemsB === '' || e.actualItemsB === null) ? '' : e.actualItemsB
+      (e.actualItemsB === undefined || e.actualItemsB === '' || e.actualItemsB === null) ? '' : e.actualItemsB,
+      // --- v1.17 appends ---
+      e.readyAt || '',
+      (e.waitMin == null || e.waitMin === '') ? '' : Math.round(e.waitMin),
+      (e.adjustedEst == null || e.adjustedEst === '') ? '' : e.adjustedEst,
+      (e.committedMin == null || e.committedMin === '') ? '' : e.committedMin,
+      msToClock(e.startedAt),
+      msToClock(e.deliveredAt),
+      msToClock(e.backAt),
+      e.returnKind || '',
+      e.lagMin    == null ? '' : Math.round(e.lagMin),
+      e.runMin    == null ? '' : Math.round(e.runMin),
+      e.returnMin == null ? '' : Math.round(e.returnMin),
+      e.idleMin   == null ? '' : Math.round(e.idleMin),
+      e.cycleMin  == null ? '' : Math.round(e.cycleMin),
+      e.realHr    == null ? '' : e.realHr.toFixed(2)
     ]);
   });
 
   // CRLF row terminator (Excel-safe); fields are already newline-neutralized above.
-  var csv = summary + '\r\n' + csvRow(headers) + '\r\n' + rows.join('\r\n');
+  return summary + '\r\n' + csvRow(headers) + '\r\n' + rows.join('\r\n');
+}
+
+// computeRealized reads the module-level `shift`. To score a historical day we point it at
+// that day's snapshot, compute, and always put the live shift back.
+function withShift(snap, fn) {
+  var saved = shift;
+  shift = snap || { date: '', blocks: [] };
+  try { return fn(); }
+  finally { shift = saved; }
+}
+
+function exportCSV() {
+  var src = getActiveLog();
+  if (!src.length) {
+    alert(exportDay === 'prev' ? 'No previous day log saved.' : 'No offers logged today yet.');
+    return;
+  }
+  var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
+  var isPrev = (exportDay === 'prev');
+  var dateStr = (isPrev && prevDate) ? prevDate : todayKey();
+  // Prev-day shift stamps only exist if that day made it into the rolling history.
+  var snap = null;
+  if (isPrev) {
+    for (var i = 0; i < logHistory.length; i++) {
+      if (logHistory[i].date === dateStr) { snap = logHistory[i].shift; break; }
+    }
+  } else {
+    snap = shiftStarted() ? shift : null;
+  }
+  downloadCsv(buildCsvFor(src, dateStr, snap, hrs), 'offers_' + dateStr + '.csv');
+}
+
+// Rolling archive export: every retained day in one file, each day as its own summary +
+// header + rows block, same shape as a single-day export so the parser needs no new mode.
+function exportAllCSV() {
+  var days = logHistory.slice();
+  if (offerLog.length) days.push({ date: todayKey(), log: offerLog, shift: shiftStarted() ? shift : null });
+  if (!days.length) { alert('No history saved yet.'); return; }
+  var blocks = [];
+  for (var i = 0; i < days.length; i++) {
+    var snap = days[i].shift || null;
+    var dh = snap ? withShift(snap, function() { return (Math.round(shiftWorkedMin() / 3) / 20).toFixed(2); }) : '';
+    blocks.push(buildCsvFor(days[i].log, days[i].date, snap, dh));
+  }
+  downloadCsv(blocks.join('\r\n\r\n'), 'offers_all_' + todayKey() + '.csv');
+}
+
+function downloadCsv(csv, filename) {
   var blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
-  a.setAttribute('download', 'offers_' + dateStr + '.csv');
+  a.setAttribute('download', filename);
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -1996,6 +2916,11 @@ function openEditModal(i) {
   document.getElementById('editStops').value    = (e.stops === undefined || e.stops === '') ? '' : e.stops;
   document.getElementById('editItems').value    = (e.items === undefined || e.items === '') ? '' : e.items;
   document.getElementById('editPlatform').value = e.platform;
+  document.getElementById('editReady').value      = e.readyAt || '';
+  document.getElementById('editStarted').value    = msToClock(e.startedAt);
+  document.getElementById('editDelivered').value  = msToClock(e.deliveredAt);
+  document.getElementById('editBack').value       = msToClock(e.backAt);
+  document.getElementById('editReturnKind').value = e.returnKind || '';
   document.getElementById('editModalMeta').textContent = e.date + '  -  ' + e.time;
   editFCFS = !!e.fcfs;
   applyEditFCFSUI();
@@ -2010,6 +2935,9 @@ function onEditPlatformChange() {
   var p = document.getElementById('editPlatform').value;
   var show = (p === 'Spark Shop' || p === 'Curbside' || p === 'Shop+Pharmacy');
   document.getElementById('editStopsItemsWrap').style.display = show ? 'grid' : 'none';
+  var rw = canHaveWait(p);
+  document.getElementById('editReadyWrap').style.visibility = rw ? '' : 'hidden';
+  if (!rw) document.getElementById('editReady').value = '';
 }
 
 function closeEditModal() {
@@ -2041,10 +2969,16 @@ function saveEdit() {
   var estMin = (!isNaN(newTimeRaw) && newTimeRaw > 0)
     ? newTimeRaw
     : (isDDUE ? getDDUETime(newMiles) : 30);
-  var itemsForBuffer = (newPlatform === 'Spark Shop' && !isNaN(newItemsRaw)) ? newItemsRaw : NaN;
-  var stopsForBuffer = (newPlatform === 'Curbside' && !isNaN(newStopsRaw)) ? newStopsRaw : NaN;
-  var buffer = getTimeBuffer(estMin, newPlatform, itemsForBuffer, stopsForBuffer);
-  var netHrMin = getNetHrMinutes(estMin, buffer, isDDUE);
+  // Verdict logic lives in two places (analyze + saveEdit) -- these MUST stay in sync.
+  var itemsForBuffer = !isNaN(newItemsRaw) ? newItemsRaw : NaN;
+  var stopsForBuffer = !isNaN(newStopsRaw) ? newStopsRaw : NaN;
+  var overrun     = getTimeBuffer(estMin, newPlatform, itemsForBuffer, stopsForBuffer);
+  var buffer      = overrun;
+  var adjustedEst = estMin + overrun;
+  var readyAtStr  = canHaveWait(newPlatform) ? document.getElementById('editReady').value : '';
+  var waitMin     = readyAtStr ? getWaitMin(readyAtStr, e.acceptedAtMs ? new Date(e.acceptedAtMs) : new Date()) : 0;
+  var committedMin = adjustedEst + waitMin;
+  var netHrMin = getNetHrMinutes(estMin, overrun, isDDUE, waitMin);
 
   var travelMi = e.travelMiles || 0;
   var totalMi  = newMiles + travelMi;
@@ -2055,7 +2989,7 @@ function saveEdit() {
 
   var isSP     = (newPlatform === 'Shop+Pharmacy');
   var minFare  = isDDUE ? 0 : isCR ? 10 : isSP ? 14 : isPharm ? getPharmMinFare(newMiles) : getMinFare(newMiles);
-  var realisticMin = estMin + buffer;
+  var realisticMin = adjustedEst;   // hard decline excludes the Phase D wait (advisory, see analyze)
   var timeRisk = !isDDUE && realisticMin >= HARD_DECLINE_MIN;
   var gasSafe  = (ppm >= SPARK_GAS_PPM) && (net > 0);
   var acceptAt = payForAccept(SPARK_ACCEPT_HR, netHrMin, gasCost, totalMi);
@@ -2086,6 +3020,18 @@ function saveEdit() {
   e.verdict    = vWord;
   e.fcfs       = editFCFS;
   e.acceptAt   = showThresh ? acceptAt : null;
+  e.readyAt      = readyAtStr || '';
+  e.waitMin      = waitMin;
+  e.adjustedEst  = adjustedEst;
+  e.committedMin = committedMin;
+  // PHASE B fixups -- missed taps are guaranteed, so Delivered / Back / B-N are all editable.
+  // Times are entered as clock time and re-anchored to the run's own accept date.
+  var anchor = e.acceptedAtMs ? new Date(e.acceptedAtMs) : new Date();
+  e.startedAt   = parseClockToMs(document.getElementById('editStarted').value, anchor);
+  e.deliveredAt = parseClockToMs(document.getElementById('editDelivered').value, anchor);
+  e.backAt      = parseClockToMs(document.getElementById('editBack').value, anchor);
+  var rk = document.getElementById('editReturnKind').value;
+  e.returnKind  = rk || null;
   // Stops/items only apply to Shop, Curbside, and Shop+Pharmacy
   if (newPlatform === 'Spark Shop' || newPlatform === 'Curbside' || newPlatform === 'Shop+Pharmacy') {
     e.stops = isNaN(newStopsRaw) ? '' : newStopsRaw;
@@ -2097,8 +3043,7 @@ function saveEdit() {
   // If verdict changed to a non-accept, and entry was auto-accepted, leave accept toggle as user set it
 
   saveOfferLog();
-  updateLogBadge();
-  renderLog();
+  renderAll();
   closeEditModal();
 }
 
@@ -2143,22 +3088,31 @@ function analyze() {
     estMin = (isNaN(estRaw) || estRaw <= 0) ? 30 : estRaw;
   }
 
-  // Item count for Shop buffer (only Spark Shop uses item-aware buffer)
+  // PHASE C: item count drives overrun for BOTH Shop and Curbside now (measured), so items
+  // are passed through for every platform -- not Shop-only as in v1.16.
   var itemsRaw = parseInt(document.getElementById('inItems').value, 10);
-  var itemsForBuffer = (platform === 'Spark Shop' && !isNaN(itemsRaw)) ? itemsRaw : NaN;
-
-  // Stop count for Curbside buffer (only Curbside uses stop-aware buffer)
+  var itemsForBuffer = !isNaN(itemsRaw) ? itemsRaw : NaN;
   var stopsRawForBuffer = parseInt(document.getElementById('inStops').value, 10);
-  var stopsForBuffer = (platform === 'Curbside' && !isNaN(stopsRawForBuffer)) ? stopsRawForBuffer : NaN;
+  var stopsForBuffer = !isNaN(stopsRawForBuffer) ? stopsRawForBuffer : NaN;
 
-  // Apply order-type / item-aware buffer
-  var buffer    = getTimeBuffer(estMin, platform, itemsForBuffer, stopsForBuffer);
-  var realisticMin = estMin + buffer;
+  // PHASE C: adjustedEst = raw est + measured overrun. This is what "est" should have meant.
+  var overrun      = getTimeBuffer(estMin, platform, itemsForBuffer, stopsForBuffer);
+  var buffer       = overrun;                  // retained name for downstream display code
+  var adjustedEst  = estMin + overrun;
+  var realisticMin = adjustedEst;
 
-  // Net/hr time applies long-run penalty on BUFFERED time (Spark only)
-  var netHrMin   = getNetHrMinutes(estMin, buffer, isDDUE);
+  // PHASE D: a known-later start is committed time attached to THIS offer, and it is knowable
+  // before accepting. Blank -> 0 -> unchanged behavior.
+  var readyAtStr = canHaveWait(platform) ? document.getElementById('inReady').value : '';
+  var waitMin    = readyAtStr ? getWaitMin(readyAtStr) : 0;
+  var committedMin = adjustedEst + waitMin;
 
-  // Hard decline fires on ADJUSTED (buffered) time -- the locked-block opportunity cost
+  // Net/hr denominator = committed time. Long-run penalty triggers on RAW est (see getNetHrMinutes).
+  var netHrMin   = getNetHrMinutes(estMin, overrun, isDDUE, waitMin);
+
+  // Hard decline fires on adjusted est WITHOUT the scheduled wait. Phase D is deliberately
+  // advisory: whether a wait is dead depends on what else is on offer (chain an order, run a
+  // DD), which the driver knows and the app does not. Price it, show it, do not auto-decline.
   var timeRisk = !isDDUE && realisticMin >= HARD_DECLINE_MIN;
 
   // Bad est time capture-glitch flag
@@ -2258,20 +3212,19 @@ function analyze() {
   var hrEl = document.getElementById('sHrRate');
   hrEl.textContent = '$' + netHrRate.toFixed(0) + '/hr';
   hrEl.className = 'stat-value ' + (netHrRate >= SPARK_ACCEPT_HR ? 'green' : netHrRate >= SPARK_MARGINAL_HR ? 'amber' : 'red');
-  var penalized = (!isDDUE && (estMin + buffer) > LONGRUN_THRESHOLD_MIN);
-  var itemBuf = (platform === 'Spark Shop' && !isNaN(itemsForBuffer) && itemsForBuffer > 0);
+  // Long-run penalty triggers on RAW est this version (Phase C must not swing the 60-70 band).
+  var penalized = (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN);
+  // Show the correction rather than hiding it: "est 30 -> adj 34", plus the wait when set.
   var bufNote;
   if (penalized) {
-    bufNote = 'est ' + estMin + '+' + buffer + ' -> ' + LONGRUN_PENALTY_MIN + 'min penalty';
+    bufNote = 'est ' + estMin + ' > ' + LONGRUN_THRESHOLD_MIN + ' -> ' + LONGRUN_PENALTY_MIN + 'min penalty';
   } else if (isDDUE) {
     bufNote = 'est ' + estMin + 'min (actual avg)';
-  } else if (buffer > 0) {
-    bufNote = itemBuf
-      ? 'est ' + estMin + '+' + buffer + 'min (' + itemsForBuffer + ' items)'
-      : 'est ' + estMin + '+' + buffer + 'min buffer';
   } else {
-    bufNote = 'est ' + estMin + 'min (no pad)';
+    bufNote = 'est ' + estMin + ' -> adj ' + adjustedEst;
+    if (!isNaN(itemsForBuffer) && itemsForBuffer > 0) bufNote += ' (' + itemsForBuffer + ' items)';
   }
+  if (waitMin > 0) bufNote += '  |  wait ' + waitMin + ' -> ' + Math.round(netHrMin) + 'min committed';
   document.getElementById('sHrSub').textContent = bufNote;
 
   document.getElementById('sGas').textContent = '$' + gasCost.toFixed(2);
@@ -2321,6 +3274,22 @@ function analyze() {
   var orderType = platform;
   var stopsVal = parseInt(document.getElementById('inStops').value, 10);
   var itemsVal = parseInt(document.getElementById('inItems').value, 10);
+
+  // STACKED ORDERS: a new accept landing before the Back tap means the previous run fed
+  // straight into this pickup -- it never went back to idle. Auto-close it as 'N' with
+  // backAt = this accept time. Editable after the fact. Only meaningful once Delivered was
+  // stamped; without that we have no return leg to close and we leave it blank.
+  var wasAccepted = (vClass === 'accept' || vClass === 'filler');
+  if (wasAccepted) {
+    // Only a delivered-but-unclosed SPARK run fed this pickup. A DD run still in flight is
+    // NOT closed by a Spark accept -- both are legitimately in the air at once.
+    var pIdx = lastOpenDeliveredSparkIdx();
+    if (pIdx >= 0) {
+      offerLog[pIdx].backAt = now.getTime();
+      offerLog[pIdx].returnKind = 'N';
+    }
+  }
+
   offerLog.push({
     date: now.toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}),
     time: now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
@@ -2338,7 +3307,21 @@ function analyze() {
     fcfs: isFCFS,
     accepted: vClass === 'accept' || vClass === 'filler',
     acceptAt: showThresh ? acceptAt : null,
+    acceptedAtMs: now.getTime(),
     travelMiles: travelMiles,
+    // PHASE C/D -- persisted so the CSV carries what the verdict was actually built on
+    readyAt: readyAtStr || '',
+    waitMin: waitMin,
+    adjustedEst: adjustedEst,
+    committedMin: committedMin,
+    // PHASE B -- stamped by the sticky bar, null until tapped. No `captured` flag: an accepted,
+    // un-closed run IS in flight, by definition. The log's Accepted state is the single source
+    // of truth -- see v1.22.
+    capDismissed: false,
+    startedAt: null,
+    deliveredAt: null,
+    backAt: null,
+    returnKind: null,
     declineReason: '',
     actualTime: '',
     actualMiles: '',
@@ -2350,6 +3333,8 @@ function analyze() {
     cashTip: ''
   });
   saveOfferLog();
+  renderShiftBar();
+  renderCaptureBar();
   updateLogBadge();
 
   document.getElementById('inPay').value = '';
@@ -2358,6 +3343,8 @@ function analyze() {
   document.getElementById('inTime').style.color = '';
   document.getElementById('inStops').value = '';
   document.getElementById('inItems').value = '';
+  document.getElementById('inReady').value = '';
+  updateReadyNote();
 
   resetFCFS();
 
@@ -2435,7 +3422,23 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyz
         localStorage.setItem('rch_log_prev_date', lastDate);
         prevLog = offerLog.slice();
         prevDate = lastDate;
+        // ROLLING HISTORY: prev used to be the only backstop, so the day before prev was
+        // destroyed on every rollover -- capture 4 shifts without exporting and shifts 1-2
+        // were gone for good. Keep the last HISTORY_DAYS days keyed by date. Offer rows are
+        // tiny; localStorage has room. Behavioral rule still stands: export every shift.
+        logHistory = logHistory.filter(function(d) { return d.date !== lastDate; });
+        logHistory.push({
+          date: lastDate,
+          log: offerLog.slice(),
+          shift: (shift.date === lastDate) ? JSON.parse(JSON.stringify(shift)) : null
+        });
+        logHistory.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+        if (logHistory.length > HISTORY_DAYS) logHistory = logHistory.slice(logHistory.length - HISTORY_DAYS);
+        saveHistory();
       }
+      // A shift never survives the rollover -- never compute a cycle across the rotation.
+      shift = { date: todayStr, blocks: [] };
+      localStorage.setItem('rch_shift', JSON.stringify(shift));
       var oldPace = JSON.parse(localStorage.getItem('rch_pace') || '{}');
       var newPace = { t: oldPace.t || 125, h: 7, e: 0 };
       localStorage.setItem('rch_pace', JSON.stringify(newPace));
@@ -2452,6 +3455,18 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyz
 
 syncGasBadge();
 updateLogBadge();
+
+// v1.17 init: a stale shift from a previous day must never score today.
+if (shift.date && shift.date !== todayKey()) {
+  shift = { date: todayKey(), blocks: [] };
+  saveShift();
+}
+applyReadyVisibility();
+document.getElementById('histDays').textContent = HISTORY_DAYS;
+document.getElementById('histCount').textContent = logHistory.length + (offerLog.length ? 1 : 0);
+renderShiftBar();
+renderCaptureBar();
+updateReadyNote();
 
 // Load saved pace
 try {
