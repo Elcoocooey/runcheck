@@ -1,6 +1,38 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.22
+  RunCheck v1.23
+  v1.23: RETURN TERM + THRESHOLD RECALIBRATION. The logic layer finally consumes the v1.16-v1.22
+         capture. Six shifts (07/14-07/19, ~180 offers, 28 leg-captured Spark runs) gave:
+           return_min = 1.13*mi + 4.9  (n=26, corr 0.81, stable across weekday/weekend/slow/busy)
+         (1) RETURN TERM in the committed-time denominator:
+               Committed Min = Adjusted Est + Wait + (1.13*mi + 4.9) + 4  (flat lag)
+             Net/hr now divides net-after-gas by this fuller committed time -- it finally counts
+             the drive back. The build-up is shown on the check screen (est -> adj +ret +lag = C),
+             not a black box. LONG-RUN RULE UNCHANGED: Eff Min = IF(raw est > 70, 120, committed),
+             trigger still on RAW est; return/lag are NOT stacked onto the 120 penalty.
+         (2) THRESHOLD 22 -> 16 on the new committed basis (marginal band 15 -> 13). NOT a
+             loosening: across 138 real offers 16-on-committed agrees with old 22-on-est on 133;
+             the 5 that differ are mile-heavy runs the new gate correctly declines. Same bar, made
+             accurate. Both copies of the verdict math (analyze + saveEdit) read the new committed.
+             The old flat "$2 marginal" rule is now a committed-time gap: net/hr below the 16 gate.
+         (3) PAY FLOOR shown on EVERY Spark offer: 16*(committed)/60 + miles*2*gasRate. Effective
+             $/mi falls as distance rises (the ~5-min return core amortizes) -- which is why the
+             old flat PPM floor was wrong on far offers. PPM is retired from the gate.
+         (4) SLOW-BOARD flag (advisory, never auto-moves the gate): high rolling idle -> marginal
+             OK vs $0/hr. DD/UE RETURN CAPTURE: DD now takes Delivered + Back taps, so DD returns
+             are measured, DD time (run + return) counts as productive in cycle/idle math, and DD
+             rows get their own realized rate (no more blank Real Net Hr from DD gaps).
+         (5) LAST-RUN RETURN: ending the shift with a run still open = NO return leg (blank), not
+             "Return 0". Blank excludes cleanly from the return model; 0 would corrupt it.
+         Constants: SPARK_ACCEPT_HR 16, SPARK_MARGINAL_HR 13, RETURN_PER_MILE 1.13,
+         RETURN_FIXED_MIN 4.9, PREDICTED_LAG_MIN 4, SLOW_BOARD_WINDOW 5, SLOW_BOARD_IDLE_PCT 40.
+         CSV: no column reordered/renamed -- Committed Min now carries the fuller value; DD rows
+         now emit Return Min / Real Net Hr. Append-only discipline preserved.
+         JUDGMENT CALLS (flagged for the analysis chat, not decided here): predicted return/lag
+         apply to SPARK committed only -- the DD filler gate is unchanged (DD returns measured, not
+         predicted into its accept gate); a delivered DD auto-closes 'N' on the next accept exactly
+         like Spark (a non-delivered DD is still never stolen); SLOW_BOARD_WINDOW/PCT defaults are
+         conservative placeholders pending real idle data.
   v1.22: CAPTURE MODE REMOVED -- capture is now driven by the log's Accepted state.
          The capture toggle was a SECOND source of truth for a fact the app already had. You
          tell it you took the run (verdict auto-accepts, or you tap Accepted in the log); the
@@ -1289,9 +1321,29 @@ var DDUE_FILLER_MIN_PPM = 1.0;  // inert backstop (was 2.0). PPM floor removed -
 // === Long-run penalty: est over this many min -> divide pay by penalty min for displayed net/hr ===
 var LONGRUN_THRESHOLD_MIN = 70;
 var LONGRUN_PENALTY_MIN = 120;
-// === Phase 3 Spark verdict bands (tunable). Net/hr drives the verdict. PPM floor removed -- time value is the gate; net/hr >= 22 already clears all-in cost. ===
-var SPARK_ACCEPT_HR = 22;   // >= this and net-positive -> ACCEPT
-var SPARK_MARGINAL_HR = 15; // >= this (and < accept) and net-positive -> MARGINAL; below -> DECLINE
+// === v1.23 RETURN TERM. Measured over 6 shifts (n=26, corr 0.81): return_min = 1.13*mi + 4.9.
+// ~5 min fixed + ~1.1 min/mile. Added to committed time so net/hr finally counts the drive back.
+// Applies to SPARK committed time only -- DD/UE keeps its own (time-capped filler) gate unchanged;
+// DD returns are now MEASURED via capture (Change 4), not predicted into the DD accept gate. ===
+var RETURN_PER_MILE  = 1.13;
+var RETURN_FIXED_MIN = 4.9;
+// Predicted lag (accept -> start) ran 2-18 min, mean ~4. Weakest input in the model, but small
+// and roughly constant relative to the run, so a flat constant is fine for v1.23. Do NOT try to
+// predict it from miles/items yet -- revisit only if post-ship data shows it varies systematically.
+var PREDICTED_LAG_MIN = 4;
+// === v1.23 Spark verdict bands, recalibrated onto the new (return-aware) committed basis.
+// 16-on-committed is NOT a loosening of the old 22-on-est: across 138 real offers the two agree
+// on 133; the 5 that differ are all mile-heavy runs the new gate correctly declines. Same bar,
+// made accurate. The build-up display makes this legible -- do NOT describe it in-app as
+// "lowering the threshold." ===
+var SPARK_ACCEPT_HR = 16;   // net >= this $/hr on committed min (incl. return+lag) -> ACCEPT
+var SPARK_MARGINAL_HR = 13; // >= this (and < accept) -> MARGINAL band (was a flat $2 rule; now a committed-time gap: how far net/hr sits below the 16 gate, not raw dollars)
+// === v1.23 SLOW-BOARD FLAG (advisory only -- never auto-adjusts the gate). When recent idle is
+// high the alternative to a marginal run is $0/hr, so a marginal accept can be right. Surface the
+// flag from realized idle; the driver decides. WINDOW / PCT are analysis-chat tunables -- these
+// are conservative defaults, confirm the exact level against real idle data. ===
+var SLOW_BOARD_WINDOW  = 5;   // look back this many most-recent closed Spark runs
+var SLOW_BOARD_IDLE_PCT = 40; // idle >= this % of that window's time -> "slow board"
 var SPARK_GAS_PPM = 1.0;    // inert sanity backstop (was 2.0). Net-positive is the real "not losing money" guard; the 2.0 floor caught 0 losers and killed ~12% of profitable, time-efficient runs.
 var HARD_DECLINE_MIN = 75;  // adjusted (buffered) time >= this -> hard DECLINE override
 // === Phase A -- gap between consecutive accepted-Spark accepts longer than this is a missed
@@ -1336,6 +1388,16 @@ try { hist = JSON.parse(localStorage.getItem('rch') || '[]'); } catch(e) { hist 
 try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch(e) { fillups = []; }
 try { offerLog = JSON.parse(localStorage.getItem('rch_log') || '[]'); } catch(e) { offerLog = []; }
 try { prevLog = JSON.parse(localStorage.getItem('rch_log_prev') || '[]'); } catch(e) { prevLog = []; }
+// v1.23 MIGRATION: DD/UE now closes on a Back tap (return capture), where before it closed on
+// Delivered. Any DD run already delivered-but-un-backed in the PERSISTED log was complete under
+// the old model -- mark it closed so the upgrade doesn't resurrect it into the capture bar. Runs
+// created after load are handled live. Stamps are preserved; only the closed flag is set.
+(function migrateDDClosure() {
+  for (var i = 0; i < offerLog.length; i++) {
+    var e = offerLog[i];
+    if (e && e.platform === 'DD/UE' && e.deliveredAt && !e.backAt && !e.capDismissed) e.capDismissed = true;
+  }
+})();
 try { prevDate = localStorage.getItem('rch_log_prev_date') || ''; } catch(e) { prevDate = ''; }
 
 // === PHASE A/B state ===
@@ -1455,7 +1517,10 @@ function ddWorkMinIn(log, a, b) {
     var e = log[i];
     if (!e.accepted || e.platform !== 'DD/UE' || !e.acceptedAtMs || !e.deliveredAt) continue;
     var from = e.startedAt || e.acceptedAtMs;
-    var s = Math.max(a, from), en = Math.min(b, e.deliveredAt);
+    // v1.23: DD occupies the driver through its return leg too -- net that whole window out of
+    // the surrounding Spark cycle/idle, not just up to Delivered.
+    var ddEnd = (e.backAt && e.backAt > e.deliveredAt) ? e.backAt : e.deliveredAt;
+    var s = Math.max(a, from), en = Math.min(b, ddEnd);
     if (en > s) t += minBetween(s, en);
   }
   return t;
@@ -1789,12 +1854,27 @@ function getTimeBuffer(estMin, platform, items, stops) {
 // trigger onto the new adjusted est would newly push 60-70 band runs over the line and swing
 // verdicts hard on top of the Phase C change -- that's a compound change. Flagged for review
 // after a few shifts; not bundled here.
-function getNetHrMinutes(estMin, buffer, isDDUE, waitMin) {
+// v1.23: predicted return leg, from the measured model. SPARK only -- see RETURN_PER_MILE note.
+// Calibrated on TOTAL route miles as a proxy for return distance: accurate for single-stop runs,
+// conservative (may over-estimate) on multi-stop Curbside where the last drop can be nearer the
+// store than the delivery-mile figure implies. That errs toward caution on exactly the offers the
+// gate should be cautious about -- acceptable. True return miles live in the mile-tracking app if
+// a future version wants to sharpen it.
+function predictedReturnMin(miles, isDDUE) {
+  if (isDDUE) return 0;
+  if (!miles || miles <= 0) return 0;
+  return RETURN_PER_MILE * miles + RETURN_FIXED_MIN;
+}
+// Committed time that drives net/hr. v1.23 adds predicted return + flat lag to the non-long-run
+// path. LONG-RUN BRANCH UNCHANGED (per spec): Eff Min = IF(raw est > 70, 120, committed). The 120
+// penalty already stands in for the whole realistic run incl. return, so return/lag are NOT added
+// on top of it. Trigger still fires on RAW est, not adjusted or committed. Do not touch it.
+function getNetHrMinutes(estMin, buffer, isDDUE, waitMin, predReturn, predLag) {
   var wait = waitMin || 0;
   if (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN) {
     return LONGRUN_PENALTY_MIN + wait;  // long-run trap: assume realistic 120 min, plus any scheduled wait
   }
-  return (estMin + buffer) + wait;
+  return (estMin + buffer) + wait + (predReturn || 0) + (predLag || 0);
 }
 // Phase D: minutes from now until a clock-time "Ready At" (HH:MM, 24h from <input type=time>).
 // Blank -> 0 -> committedMin == adjustedEst -> identical to pre-Phase-D behavior.
@@ -2026,10 +2106,18 @@ function computeRealized(log, useShift) {
     if (e.startedAt && e.startedAt > e.acceptedAtMs) e.lagMin = minBetween(e.acceptedAtMs, e.startedAt);
     var runFrom = e.startedAt || e.acceptedAtMs;
     if (e.platform === 'DD/UE') {
-      // DD time is real working time. No Back tap, no B/N flag -- DD returns are not the question.
+      // v1.23: DD now captures a return leg (Delivered + Back), so DD $/hr finally counts the
+      // drive back and DD-vs-Spark is comparable. DD time (run + return) is productive, not idle.
       if (e.deliveredAt && e.deliveredAt > runFrom) {
         e.runMin = minBetween(runFrom, e.deliveredAt);
         ddWorkMin += e.runMin;
+        if (e.backAt && e.backAt > e.deliveredAt) {
+          e.returnMin = minBetween(e.deliveredAt, e.backAt);
+          ddWorkMin += e.returnMin;
+        }
+        // Give the DD row its own realized rate over its occupied time (no blank Real Net Hr).
+        var ddCycle = e.runMin + (e.returnMin || 0);
+        if (ddCycle > 0) { e.cycleMin = ddCycle; e.realHr = (e.net || 0) / ddCycle * 60; }
       }
       continue;
     }
@@ -2083,6 +2171,24 @@ function computeRealized(log, useShift) {
     breakMin: breakMinTotal(),
     ddWorkMin: ddWorkMin
   };
+}
+
+// v1.23 SLOW-BOARD detector (advisory). Idle as a fraction of cycle time over the last
+// SLOW_BOARD_WINDOW closed Spark runs. Requires a full window so it can't fire on the first
+// accept of the day. Never changes the gate -- only surfaces a flag the driver can act on.
+function slowBoardActive() {
+  computeRealized(offerLog, false);   // populate cycleMin/idleMin on prior entries
+  var idle = 0, cyc = 0, cnt = 0;
+  for (var i = offerLog.length - 1; i >= 0 && cnt < SLOW_BOARD_WINDOW; i--) {
+    var e = offerLog[i];
+    if (!e.accepted || e.platform === 'DD/UE') continue;
+    if (e.cycleMin == null) continue;   // only closed runs with a measured cycle
+    cyc += e.cycleMin;
+    idle += (e.idleMin || 0);
+    cnt++;
+  }
+  if (cnt < SLOW_BOARD_WINDOW || cyc <= 0) return false;
+  return (idle / cyc * 100) >= SLOW_BOARD_IDLE_PCT;
 }
 
 // PHASE D. Blank Ready At = ready now = zero change to pre-Phase-D behavior.
@@ -2140,6 +2246,13 @@ function toggleShift() {
     var ob = openBreak();
     if (ob) ob.end = now;   // an open break cannot outlive its block
     bl.stop = now;
+    // v1.23 Change 5: ending the shift at a delivery (drive home / kid pickup) means NO return
+    // leg -- not "Return 0". Close any still-open run WITHOUT stamping Back: returnMin stays blank,
+    // which excludes cleanly from the return model (a 0 would corrupt it). Stamps are preserved,
+    // so if you did drive back you can add the Back tap in Edit.
+    var openNow = allInflightIdxs();
+    for (var oi = 0; oi < openNow.length; oi++) offerLog[openNow[oi]].capDismissed = true;
+    if (openNow.length) saveOfferLog();
     clearShiftPending();
   }
   saveShift();
@@ -2187,11 +2300,12 @@ function toggleBreak() {
   renderAll();
 }
 
-// A run closes on the Back tap (Spark) or Delivered (DD/UE -- no return leg to capture).
-// capDismissed closes it without inventing timestamps, for a run whose taps were missed.
+// v1.23: BOTH platforms close on the Back tap now -- DD/UE captures a return leg too. A delivered
+// DD stays in the bar for its B/N tap, just like Spark. capDismissed closes a run whose taps were
+// missed, without inventing timestamps.
 function isRunClosed(e) {
   if (e.capDismissed) return true;
-  return e.platform === 'DD/UE' ? !!e.deliveredAt : !!e.backAt;
+  return !!e.backAt;
 }
 
 // RUNS OVERLAP IN REAL LIFE. You can be mid-DoorDash and accept a Spark offer -- both are in
@@ -2226,12 +2340,16 @@ function activeRunIdx() {
   return o.length ? o[o.length - 1] : -1;
 }
 
-// Most recent open SPARK run that has been delivered but not closed -- the stacked-order case.
-function lastOpenDeliveredSparkIdx() {
+// v1.23: most recent open run (Spark OR DD) that has been delivered but not closed -- the
+// stacked-order case. Only a DELIVERED run fed the new pickup; a run still mid-delivery is never
+// closed by a next accept (both are legitimately in the air), which preserves the v1.20 rule that
+// a non-delivered DD is not stolen by a Spark accept. Now that DD has a return leg, a delivered DD
+// closes as 'N' on the next accept exactly like a delivered Spark.
+function lastOpenDeliveredIdx() {
   var o = openRunIdxs();
   for (var k = o.length - 1; k >= 0; k--) {
     var e = offerLog[o[k]];
-    if (e.platform !== 'DD/UE' && e.deliveredAt && !e.backAt) return o[k];
+    if (e.deliveredAt && !e.backAt) return o[k];
   }
   return -1;
 }
@@ -2253,7 +2371,7 @@ function tapStarted(i) {
 }
 function tapDelivered(i) {
   offerLog[i].deliveredAt = Date.now();
-  // DD/UE has no return leg to capture, so Delivered closes it outright.
+  // v1.23: Delivered no longer closes DD -- it now shows B/N so the DD return leg gets measured.
   saveOfferLog();
   renderAll();
 }
@@ -2977,8 +3095,11 @@ function saveEdit() {
   var adjustedEst = estMin + overrun;
   var readyAtStr  = canHaveWait(newPlatform) ? document.getElementById('editReady').value : '';
   var waitMin     = readyAtStr ? getWaitMin(readyAtStr, e.acceptedAtMs ? new Date(e.acceptedAtMs) : new Date()) : 0;
-  var committedMin = adjustedEst + waitMin;
-  var netHrMin = getNetHrMinutes(estMin, overrun, isDDUE, waitMin);
+  // v1.23: keep this copy of the verdict math in lock-step with analyze() -- return + flat lag.
+  var predReturn = predictedReturnMin(newMiles, isDDUE);
+  var predLag    = isDDUE ? 0 : PREDICTED_LAG_MIN;
+  var committedMin = adjustedEst + waitMin + predReturn + predLag;
+  var netHrMin = getNetHrMinutes(estMin, overrun, isDDUE, waitMin, predReturn, predLag);
 
   var travelMi = e.travelMiles || 0;
   var totalMi  = newMiles + travelMi;
@@ -3105,10 +3226,13 @@ function analyze() {
   // before accepting. Blank -> 0 -> unchanged behavior.
   var readyAtStr = canHaveWait(platform) ? document.getElementById('inReady').value : '';
   var waitMin    = readyAtStr ? getWaitMin(readyAtStr) : 0;
-  var committedMin = adjustedEst + waitMin;
+  // v1.23: committed time now includes the predicted return leg + flat lag (Spark only).
+  var predReturn = predictedReturnMin(miles, isDDUE);
+  var predLag    = isDDUE ? 0 : PREDICTED_LAG_MIN;
+  var committedMin = adjustedEst + waitMin + predReturn + predLag;
 
   // Net/hr denominator = committed time. Long-run penalty triggers on RAW est (see getNetHrMinutes).
-  var netHrMin   = getNetHrMinutes(estMin, overrun, isDDUE, waitMin);
+  var netHrMin   = getNetHrMinutes(estMin, overrun, isDDUE, waitMin, predReturn, predLag);
 
   // Hard decline fires on adjusted est WITHOUT the scheduled wait. Phase D is deliberately
   // advisory: whether a wait is dead depends on what else is on offer (chain an order, run a
@@ -3183,10 +3307,29 @@ function analyze() {
   document.getElementById('vReason').textContent = vReason;
 
   var thresh = document.getElementById('vThreshold');
+  var slow = !isDDUE && slowBoardActive();
   if (badEst) {
     thresh.style.display = 'block';
     thresh.style.color = 'var(--amber)';
     thresh.textContent = 'Check est time? ' + miles.toFixed(1) + 'mi in ' + estMin + 'min implies ' + (miles/(estMin/60)).toFixed(0) + ' mph -- likely a typo.';
+  } else if (!isDDUE) {
+    // v1.23 Change 3: the pay floor is shown on EVERY Spark offer, not just marginal/decline.
+    // acceptAt = payForAccept(16, committed incl. return+lag, gas) -- the driver-facing floor.
+    thresh.style.display = 'block';
+    thresh.style.color = '';
+    var floorTxt;
+    if (acceptAt > pay) {
+      floorTxt = 'Gate $' + acceptAt.toFixed(2) + '+  --  needs $' + (acceptAt - pay).toFixed(2) + ' more';
+    } else {
+      floorTxt = 'Gate $' + acceptAt.toFixed(2) + '+  --  clear by $' + (pay - acceptAt).toFixed(2);
+    }
+    // Slow-board advisory: high recent idle means the real alternative is $0/hr, so a run below
+    // the 16 gate can be worth taking. Advisory only -- the gate itself is NOT moved.
+    if (slow && netHrRate < SPARK_ACCEPT_HR) {
+      floorTxt += '  |  SLOW BOARD -- marginal OK vs $0 idle';
+      thresh.style.color = 'var(--amber)';
+    }
+    thresh.textContent = floorTxt;
   } else if (showThresh) {
     thresh.style.display = 'block';
     thresh.style.color = '';
@@ -3214,7 +3357,7 @@ function analyze() {
   hrEl.className = 'stat-value ' + (netHrRate >= SPARK_ACCEPT_HR ? 'green' : netHrRate >= SPARK_MARGINAL_HR ? 'amber' : 'red');
   // Long-run penalty triggers on RAW est this version (Phase C must not swing the 60-70 band).
   var penalized = (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN);
-  // Show the correction rather than hiding it: "est 30 -> adj 34", plus the wait when set.
+  // Show the build-up so committed time is not a black box: est -> adj +wait +ret +lag = committed.
   var bufNote;
   if (penalized) {
     bufNote = 'est ' + estMin + ' > ' + LONGRUN_THRESHOLD_MIN + ' -> ' + LONGRUN_PENALTY_MIN + 'min penalty';
@@ -3222,9 +3365,10 @@ function analyze() {
     bufNote = 'est ' + estMin + 'min (actual avg)';
   } else {
     bufNote = 'est ' + estMin + ' -> adj ' + adjustedEst;
+    if (waitMin > 0) bufNote += ' +wait ' + waitMin;
+    bufNote += ' +ret ' + Math.round(predReturn) + ' +lag ' + predLag + ' = ' + Math.round(committedMin) + 'min';
     if (!isNaN(itemsForBuffer) && itemsForBuffer > 0) bufNote += ' (' + itemsForBuffer + ' items)';
   }
-  if (waitMin > 0) bufNote += '  |  wait ' + waitMin + ' -> ' + Math.round(netHrMin) + 'min committed';
   document.getElementById('sHrSub').textContent = bufNote;
 
   document.getElementById('sGas').textContent = '$' + gasCost.toFixed(2);
@@ -3281,9 +3425,9 @@ function analyze() {
   // stamped; without that we have no return leg to close and we leave it blank.
   var wasAccepted = (vClass === 'accept' || vClass === 'filler');
   if (wasAccepted) {
-    // Only a delivered-but-unclosed SPARK run fed this pickup. A DD run still in flight is
-    // NOT closed by a Spark accept -- both are legitimately in the air at once.
-    var pIdx = lastOpenDeliveredSparkIdx();
+    // A delivered-but-unclosed run (Spark or, as of v1.23, DD) fed this pickup -- close it 'N'.
+    // A run still mid-delivery is NOT closed: both are legitimately in the air at once.
+    var pIdx = lastOpenDeliveredIdx();
     if (pIdx >= 0) {
       offerLog[pIdx].backAt = now.getTime();
       offerLog[pIdx].returnKind = 'N';
