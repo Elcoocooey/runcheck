@@ -1,6 +1,81 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.23
+  RunCheck v1.25
+  v1.25: THE GAS DEFAULT, AND TWO NUMBERS THAT DISAGREED WITH THEMSELVES.
+         (1) GAS DEFAULT 0.224 -> 0.3175. Per-row derivation across 243 offers showed the rate
+             the gate actually used stepping 0.2519 (07/20) -> 0.281 -> 0.284 -> 0.3175 (07/26):
+             three step-ups in seven days. 0.224 appeared in ZERO of those rows, because it is
+             pure fallback -- it fires only when no fillup exists, which is exactly when nobody
+             is looking. A fresher constant does not fix that, so the fallback is now LOUD as
+             well as current: the gas badge turns red and reads "default -- no fillup" while the
+             shipped constant is in force, and amber when the newest fillup is over
+             GAS_STALE_DAYS (10) old. Fillups now carry a real timestamp so age is knowable.
+             The per-fillup mechanism itself is UNTOUCHED -- it was working correctly.
+             NOT hard-blocked on missing fillup data: refusing to produce a verdict at the line
+             fails the driver at the moment the tool exists to help. Flagged, not silent.
+         (2) LONG-RUN 120 IS NOW A FLOOR, NOT A CEILING (Option A):
+               Eff Min = MAX(120 + wait, committed)     was: 120 + wait
+             On offers whose committed time already exceeded 120 the old rule was a DISCOUNT of
+             11-60 min -- which is how a 16-stop Curbside printed $21/hr beside a DECLINE, the
+             single number most likely to pull a manual override the wrong way. Verdict impact
+             measured across 243 offers: ZERO. All 23 rows where 120 discounted and all 9 where
+             it penalized were already hard-declined at adjusted >= 75; the only band that could
+             move (raw est > 70 with adjusted < 75) did not occur once.
+         (3) DD "ACCEPTS AT" NOW QUOTES THE DD GATE. Both copies of the verdict math computed
+             the displayed floor at SPARK_ACCEPT_HR (16) for every platform, while a DD/UE offer
+             actually clears at DDUE_FILLER_MIN_HR (15) -- so a declined DD showed a floor above
+             the pay that would have flipped it to FILLER. Display-only; no gate moved.
+         (4) BREAK CORRECTION. A break could be started and ended and never touched again. One
+             accidental press logged 165 min against an actual 79, and that number is subtracted
+             in three places at once: shift worked minutes, every cycle it overlaps, and the
+             Break Min cell. There was no in-app way to fix it. Breaks are now editable and
+             removable from the shift bar ("fix a break"), with the same idioms as everything
+             else: no native dialogs, two-tap confirm to delete, and a rejected edit says why.
+         (5) CYCLE COVERAGE REPORTING. The v1.24 cycle fix stopped subtracting overlapping DD
+             minutes, so a few cycles may now cross CYCLE_BREAK_MIN and go blank. Rather than
+             leave that to be discovered, every export now reports Cycles Scored / Cycles
+             Dropped / Cycles Dropped New on the summary line, and each dropped row carries
+             Cycle Drop Min plus a NEW marker if the v1.23 math would have scored it.
+             CYCLE_BREAK_MIN (90) is UNCHANGED -- measure first.
+         CSV: two columns APPENDED (Cycle Drop Min, Cycle Drop New) and three fields appended to
+         the summary line. No existing column reordered or renamed.
+         STILL HELD, not built: lag 4 -> 6, and the high-item cap.
+  v1.24: CYCLE INTEGRITY. One correctness fix, one consistency fix, one disclosure -- no gate,
+         threshold, verdict or constant was touched. The instrument was reading wrong; the
+         instrument is what got fixed.
+         (1) CYCLE MIN. On 6 of 53 completed runs the cycle came out SHORTER than the legs it
+             is made of -- worst case Cycle 1 against 41 min of Lag+Run+Return+Idle, which
+             divided into a Real Net Hr of 560.92. Two causes, both real:
+               (a) a DD order STACKED inside a Spark run had its minutes netted out of the
+                   Spark cycle, as if the Spark run had not been happening during them. Only
+                   DD that FILLS THE GAP is another platform's time; DD that overlaps the run
+                   is a stacked order and stays in.
+               (b) Back tapped AFTER the next accept (accepting while still driving back) sent
+                   idle negative, floored it to 0, and let the return leg overrun the cycle.
+             The cycle is now BUILT FROM ITS OWN PARTS: occupied (accept -> Back) plus idle
+             (whatever is left before the next accept), with only the idle window eligible for
+             the DD subtraction. It can no longer come out shorter than its legs.
+         (2) RECONCILIATION, not silence. The two shortfalls that remain legitimate -- a break
+             stamped inside a run (genuinely off the clock) and a return leg that overran the
+             next accept -- are now REPORTED as Cycle Break Min and Cycle Overlap Min, so every
+             row audits from the CSV alone:
+               Lag + Run + Return + Idle == Cycle + Cycle Break Min + Cycle Overlap Min
+         (3) CLOSE REASON. A blank Return Min used to mean either "shift ended here, no return
+             leg" (legitimate) or "the tap was missed" (data loss), with no way to tell them
+             apart. Runs now record B / N / SHIFT-END / DISMISSED.
+         (4) HOURS WORKED (AI-1, deferred from v1.23) -- and the summary/denominator split it
+             was hiding. The summary cell read from the input box while realized $/shift-hr
+             divided by the actual stamps, so the two disagreed (07/22 6.1 vs 5.7, 07/24 8.5 vs
+             8.9). Both days now auto-fill from that day's retained blocks through ONE shared
+             function that Export All also calls; the hardcoded `7` placeholder for prev is
+             gone; switching days clears a stale manual override; and a deliberate override is
+             shown against the stamps instead of shipping two denominators in silence.
+         NOT CHANGED, deliberately: SPARK_ACCEPT_HR/MARGINAL_HR, the return model, the 120-min
+         long-run penalty, HARD_DECLINE_MIN, and the DD filler gate. The verdict/display split
+         (declines shown at >= $16/hr) and the DD "Accepts at" floor are open QUESTIONS for the
+         analysis chat -- see the v1.24 notes. Nothing about them was guessed at here.
+         CSV: three columns APPENDED (Close Reason, Cycle Break Min, Cycle Overlap Min). No
+         existing column reordered or renamed. Append-only discipline preserved.
   v1.23: RETURN TERM + THRESHOLD RECALIBRATION. The logic layer finally consumes the v1.16-v1.22
          capture. Six shifts (07/14-07/19, ~180 offers, 28 leg-captured Spark runs) gave:
            return_min = 1.13*mi + 4.9  (n=26, corr 0.81, stable across weekday/weekend/slow/busy)
@@ -809,8 +884,8 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     </div>
     <div class="gas-badge" id="gasBadge" onclick="toggleGasPanel()">
       <div class="badge-label">gas / mi</div>
-      <strong class="badge-val" id="gasBadgeVal">$0.224</strong>
-      <div class="badge-src" id="gasBadgeSrc">tap to update</div>
+      <strong class="badge-val" id="gasBadgeVal">$0.318</strong>
+      <div class="badge-src" id="gasBadgeSrc">default -- no fillup</div>
     </div>
   </div>
 </header>
@@ -863,10 +938,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   <div class="gas-pane" id="pane-manual">
     <div class="slider-wrap">
       <label>Override gas cost per mile manually</label>
-      <input type="range" min="0.15" max="0.45" value="0.224" step="0.001" id="gasSlider" oninput="manualGas(this.value)">
+      <input type="range" min="0.15" max="0.45" value="0.3175" step="0.001" id="gasSlider" oninput="manualGas(this.value)">
       <div class="slider-readout">
         <em>Jan $0.169 -- Apr $0.354</em>
-        <strong id="gasSliderVal">$0.224</strong>
+        <strong id="gasSliderVal">$0.318</strong>
       </div>
     </div>
   </div>
@@ -947,7 +1022,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
           style="background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:28px;font-weight:bold;width:100%;text-align:center;-webkit-appearance:none;">
         <button onclick="adjustShiftHrs(0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">+</button>
       </div>
-      <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">hrs &nbsp;&middot;&nbsp; <span id="offersPerHr">--</span> offers/hr</div>
+      <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">hrs &nbsp;&middot;&nbsp; <span id="offersPerHr">--</span> offers/hr<span id="hrsStampNote" onclick="resetHoursToStamps()" style="cursor:pointer;"></span></div>
     </div>
     <button class="export-btn" id="exportBtn" onclick="exportCSV()">DOWNLOAD TODAY'S CSV</button>
     <div class="export-info">Downloads a CSV of all offers checked including hours worked.<br>Add to your weekly offer tracking workbook.</div>
@@ -1039,6 +1114,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   </div>
   <div id="undoEndRow" style="display:none;text-align:center;margin-top:6px;">
     <button onclick="undoEndShift()" style="background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;text-decoration:underline;">undo end -- reopen this shift</button>
+  </div>
+  <div id="breakEditRow" style="display:none;margin-top:8px;">
+    <button id="breakEditToggle" onclick="toggleBreakEditor()" style="background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;text-decoration:underline;width:100%;text-align:center;">fix a break</button>
+    <div id="breakEditList" style="display:none;margin-top:6px;"></div>
   </div>
   <div class="pace-stats" style="margin-top:10px;">
     <div class="pace-stat">
@@ -1313,7 +1392,23 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 </div>
 
 <script>
-var gas = 0.224;
+// === SHIPPED GAS DEFAULT -- FALLBACK ONLY, and it WILL go stale. ===
+// v1.25: was 0.224. Derived per-row from 243 offers, the rate the gate actually used ran
+// 0.2519 (07/20) -> 0.2812 -> 0.2813 -> 0.2840 -> 0.2838 -> 0.3177 -> 0.3173 (07/26): three
+// step-ups in seven days. 0.224 appeared in ZERO of those rows -- it is pure fallback, which
+// is exactly why nobody caught it being 29% low. A stale fallback that only fires when no one
+// is looking is the failure mode; a fresher number does not fix that, so the fallback is now
+// LOUD (see gasIsDefault / gasStaleDays below) as well as current.
+// Live at time of build (07/27/2026) = $0.3175/mi.
+var GAS_SHIPPED_DEFAULT = 0.3175;
+var GAS_DEFAULT_SET_ON = '2026-07-27';
+// A fillup older than this stops being evidence about today's pump price. The rate moved
+// ~26% in a week; a two-week-old fillup is a guess wearing a measurement's clothes.
+var GAS_STALE_DAYS = 10;
+var gas = GAS_SHIPPED_DEFAULT;
+// True while no fillup and no manual entry has ever been supplied -- i.e. the number on screen
+// is the shipped constant, not a measurement. Drives the warnings.
+var gasIsDefault = true;
 // === TUNABLE: DD/UE filler branch net/hr floor. Provisional 15 (was 20): DD fills idle only, so a quick (<=25min) $5-6 net run beats $0 idle. Monitor -- small risk of missing a Spark ping mid-run. ===
 var DDUE_FILLER_MIN_HR = 15;
 var DDUE_FILLER_MAX_MIN = 25;   // hard cap on est time -- do not relax
@@ -1367,7 +1462,7 @@ var HISTORY_DAYS = 14;             // rolling rch_log_history retention
 // tapping and the run isn't recoverable from the bar anyway -- fix it in Edit. Overflow is
 // reported in the bar, never silently swallowed.
 var MAX_INFLIGHT = 3;
-var gasSource = 'tap to update';
+var gasSource = 'default -- no fillup';
 var platform = 'Spark Shop';
 var hist = [];
 var fillups = [];
@@ -1554,6 +1649,26 @@ function inShift(ms) {
 if (fillups.length > 0) {
   gas = fillups[0].cpm;
   gasSource = 'fillup ' + fillups[0].date;
+  gasIsDefault = false;
+}
+
+// Age of the newest fillup in days, or null if unknown. Entries logged before v1.25 have no
+// timestamp -- unknown age is NOT treated as stale, since guessing old would be its own bug.
+function gasStaleDays() {
+  if (!fillups.length || !fillups[0].ts) return null;
+  return Math.floor((Date.now() - fillups[0].ts) / 86400000);
+}
+// One place that decides whether the rate on screen can be trusted, so the badge, the check
+// screen and the export cannot disagree about it.
+function gasWarning() {
+  if (gasIsDefault) {
+    return { level: 'bad', text: 'SHIPPED DEFAULT $' + GAS_SHIPPED_DEFAULT.toFixed(4) + '/mi -- log a fillup' };
+  }
+  var d = gasStaleDays();
+  if (d != null && d >= GAS_STALE_DAYS) {
+    return { level: 'warn', text: 'fillup is ' + d + ' days old -- rate may have moved' };
+  }
+  return null;
 }
 
 function payBlur(el) {
@@ -1613,6 +1728,13 @@ function updateTravelNote() {
 function syncGasBadge() {
   document.getElementById('gasBadgeVal').textContent = '$' + gas.toFixed(3);
   document.getElementById('gasBadgeSrc').textContent = gasSource;
+  // v1.25: an unmeasured or stale rate is now visible on the badge itself. Every dollar figure
+  // in this app is downstream of this number.
+  var w = gasWarning();
+  var badge = document.getElementById('gasBadge');
+  var srcEl = document.getElementById('gasBadgeSrc');
+  if (badge) badge.style.borderColor = w ? (w.level === 'bad' ? 'var(--red)' : 'var(--amber)') : '';
+  if (srcEl) srcEl.style.color = w ? (w.level === 'bad' ? 'var(--red)' : 'var(--amber)') : '';
   document.getElementById('gasSlider').value = gas;
   document.getElementById('gasSliderVal').textContent = '$' + gas.toFixed(3);
 }
@@ -1673,13 +1795,16 @@ function saveFillup() {
   var dateStr = now.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
   var timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
 
-  var entry = { ppg: ppg, gal: gal, mi: mi, totalCost: totalCost, cpm: cpm, mpg: mpg, date: dateStr, time: timeStr };
+  // v1.25: ts added so fillup age is knowable. `date` is a display string with no year and
+  // cannot be compared. Pre-v1.25 entries have no ts and are simply treated as unknown age.
+  var entry = { ppg: ppg, gal: gal, mi: mi, totalCost: totalCost, cpm: cpm, mpg: mpg, date: dateStr, time: timeStr, ts: Date.now() };
   fillups.unshift(entry);
   if (fillups.length > 20) fillups = fillups.slice(0, 20);
   try { localStorage.setItem('rch_fillups', JSON.stringify(fillups)); } catch(e) {}
 
   gas = cpm;
   gasSource = 'fillup ' + dateStr;
+  gasIsDefault = false;
   syncGasBadge();
 
   document.getElementById('fuPPG').value = '';
@@ -1719,8 +1844,9 @@ function renderFuHistory() {
 function clearFillups() {
   fillups = [];
   try { localStorage.removeItem('rch_fillups'); } catch(e) {}
-  gas = 0.224;
-  gasSource = 'tap to update';
+  gas = GAS_SHIPPED_DEFAULT;
+  gasSource = 'default -- no fillup';
+  gasIsDefault = true;   // back to the shipped constant, and the badge now says so
   syncGasBadge();
   renderFuHistory();
 }
@@ -1728,6 +1854,7 @@ function clearFillups() {
 function manualGas(v) {
   gas = parseFloat(v);
   gasSource = 'manual';
+  gasIsDefault = false;   // the driver typed a number; that is an input, not a fallback
   document.getElementById('gasSliderVal').textContent = '$' + gas.toFixed(3);
   syncGasBadge();
 }
@@ -1871,10 +1998,21 @@ function predictedReturnMin(miles, isDDUE) {
 // on top of it. Trigger still fires on RAW est, not adjusted or committed. Do not touch it.
 function getNetHrMinutes(estMin, buffer, isDDUE, waitMin, predReturn, predLag) {
   var wait = waitMin || 0;
+  var committed = (estMin + buffer) + wait + (predReturn || 0) + (predLag || 0);
   if (!isDDUE && estMin > LONGRUN_THRESHOLD_MIN) {
-    return LONGRUN_PENALTY_MIN + wait;  // long-run trap: assume realistic 120 min, plus any scheduled wait
+    // v1.25 OPTION A. This was `return 120 + wait`, which on offers whose committed time
+    // already EXCEEDED 120 stopped being a penalty and became a discount of 11-60 minutes --
+    // the reason a 16-stop Curbside could print $21/hr next to a DECLINE. The 120 is a FLOOR
+    // now: it still protects against a short-listed run that will realistically eat two hours,
+    // but a genuinely 180-minute commitment is scored as 180.
+    // VERDICT IMPACT, measured across 243 offers (analysis chat, 07/27): zero. All 23 rows
+    // where 120 acted as a discount and all 9 where it acted as a penalty were ALREADY hard
+    // declined at adjusted >= 75. The only band this could move -- raw est > 70 with adjusted
+    // < 75, i.e. under 4 min of overrun on a 71-73 min run -- did not occur once. So this is a
+    // display-honesty fix that happens to also be the correct denominator.
+    return Math.max(LONGRUN_PENALTY_MIN + wait, committed);
   }
-  return (estMin + buffer) + wait + (predReturn || 0) + (predLag || 0);
+  return committed;
 }
 // Phase D: minutes from now until a clock-time "Ready At" (HH:MM, 24h from <input type=time>).
 // Blank -> 0 -> committedMin == adjustedEst -> identical to pre-Phase-D behavior.
@@ -1897,6 +2035,13 @@ function isBadEstTime(miles, estMin) {
   var impliedMph = miles / (estMin / 60);
   return impliedMph > 60;
 }
+
+// The net/hr gate that actually decides THIS platform's verdict. Spark clears at
+// SPARK_ACCEPT_HR; a DD/UE filler clears at DDUE_FILLER_MIN_HR. v1.25: both copies of the
+// verdict math used to quote the Spark 16 for every platform, so a declined DD displayed a
+// floor ABOVE the pay that would have flipped it to FILLER (at 5 mi it said $7.58 when the
+// verdict actually turns over at $7.24). Display-only -- no gate moved.
+function acceptTargetFor(isDDUE) { return isDDUE ? DDUE_FILLER_MIN_HR : SPARK_ACCEPT_HR; }
 
 // Pay needed to reach a target net/hr, given time and gas cost.
 // net/hr = (pay - gasCost) / (netHrMin/60)  ->  pay = target*(netHrMin/60) + gasCost
@@ -2069,9 +2214,12 @@ function switchExportDay(day) {
   document.getElementById('expSelPrev').classList.toggle('active', day === 'prev');
   document.getElementById('hrsLabel').textContent = day === 'today' ? 'Hours Worked Today' : 'Hours Worked (' + (prevDate || 'previous') + ')';
   document.getElementById('exportBtn').textContent = day === 'today' ? "DOWNLOAD TODAY'S CSV" : 'DOWNLOAD PREV DAY CSV';
-  // Reset hours when switching to prev (default 7)
-  if (day === 'prev') document.getElementById('shiftHrsWorked').value = 7;
-  else document.getElementById('shiftHrsWorked').value = 0;
+  // v1.24 (AI-1): the hardcoded `= 7` placeholder for prev is gone. Both days now auto-fill
+  // from that day's retained shift blocks in renderExportSummary. Switching days also clears
+  // the manual flag -- a figure typed for one day must never ride along into another, which is
+  // how the summary "Hours Worked" cell drifted away from the stamps the realized rate uses.
+  hoursManual = false;
+  document.getElementById('shiftHrsWorked').value = 0;
   renderExportSummary();
 }
 
@@ -2102,6 +2250,7 @@ function computeRealized(log, useShift) {
   for (i = 0; i < log.length; i++) {
     e = log[i];
     e.cycleMin = null; e.realHr = null; e.runMin = null; e.returnMin = null; e.idleMin = null; e.lagMin = null;
+    e.cycleBreakMin = null; e.cycleOverlapMin = null; e.cycleDropMin = null; e.cycleDropNew = false;
     if (!e.accepted || !e.acceptedAtMs) continue;
     if (e.startedAt && e.startedAt > e.acceptedAtMs) e.lagMin = minBetween(e.acceptedAtMs, e.startedAt);
     var runFrom = e.startedAt || e.acceptedAtMs;
@@ -2124,6 +2273,12 @@ function computeRealized(log, useShift) {
     runs.push(e);
   }
   var sumNet = 0, sumCycle = 0;
+  // v1.25 COVERAGE DIAGNOSTIC. A cycle over CYCLE_BREAK_MIN is discarded as a missed break tap.
+  // The v1.24 cycle fix stopped subtracting overlapping DD minutes, so some cycles are larger
+  // than they were and a few may now cross 90 that previously sat under it. Blank cycles degrade
+  // the coverage metric, so the count is REPORTED rather than left to be discovered -- including
+  // how many are NEWLY blank versus the v1.23 math. Diagnostic only: 90 is untouched.
+  var cyclesScored = 0, cyclesDropped = 0, cyclesDroppedNew = 0;
   for (i = 0; i < runs.length; i++) {
     e = runs[i];
     var rf = e.startedAt || e.acceptedAtMs;
@@ -2131,23 +2286,66 @@ function computeRealized(log, useShift) {
     if (e.backAt && e.deliveredAt && e.backAt > e.deliveredAt) e.returnMin = minBetween(e.deliveredAt, e.backAt);
     var nxt = runs[i + 1];
     if (!nxt) continue;                 // last run of day: idle/cycle blank. Expected, not an error.
-    var gapMin = minBetween(e.acceptedAtMs, nxt.acceptedAtMs);
-    // CYCLE_BREAK_MIN is the backstop for a MISSED break tap. Real break stamps are preferred:
-    // strip stamped break time -- and any DD run that filled the gap -- out before judging it.
-    var stampedBreak = breakMinIn(e.acceptedAtMs, nxt.acceptedAtMs);
-    var ddIn = ddWorkMinIn(log, e.acceptedAtMs, nxt.acceptedAtMs);
-    var netGap = gapMin - stampedBreak - ddIn;
-    if (netGap <= 0 || netGap > CYCLE_BREAK_MIN) continue;
-    e.cycleMin = netGap;
-    e.realHr = (e.net || 0) / netGap * 60;
-    sumNet += (e.net || 0);
-    sumCycle += netGap;
-    if (e.backAt) {
-      var idle = minBetween(e.backAt, nxt.acceptedAtMs)
-               - breakMinIn(e.backAt, nxt.acceptedAtMs)
-               - ddWorkMinIn(log, e.backAt, nxt.acceptedAtMs);
-      e.idleMin = idle > 0 ? idle : 0;
+    var nextAcc = nxt.acceptedAtMs;
+    // === v1.24 CYCLE FIX =====================================================
+    // v1.23 computed the cycle as (gap - all stamped breaks - ALL DD work in the gap) and
+    // computed idle separately from Back. Nothing tied the two together, so on 6 of 53 runs
+    // the cycle came out SHORTER than the legs it is supposedly made of -- worst case Cycle 1
+    // against 41 min of Lag+Run+Return+Idle, which divided into a Real Net Hr of 560.92.
+    // Two mechanisms, both real:
+    //   (a) a DD order STACKED inside the Spark run. Its minutes overlap this run's own legs,
+    //       but they were netted out of the cycle anyway -- as if the Spark run had not
+    //       happened during them. Only DD that actually FILLS THE GAP is another platform's
+    //       time; DD that overlaps the run is a stacked order and stays in.
+    //   (b) Back tapped AFTER the next accept (you accept while still driving back). Idle went
+    //       negative, floored to 0, and the return leg silently overran the cycle.
+    // Fix: build the cycle from its own parts. OCCUPIED = accept -> Back (or Delivered if Back
+    // was never tapped) = time demonstrably spent on THIS run, and only the leftover IDLE
+    // window is eligible for the DD subtraction. Both shortfalls are now DISCLOSED rather
+    // than swallowed, so every row reconciles from the CSV alone:
+    //     Lag + Run + Return + Idle  ==  Cycle + Cycle Break Min + Cycle Overlap Min
+    var occEnd = null, occFromBack = false;
+    if (e.backAt && e.backAt > e.acceptedAtMs) { occEnd = e.backAt; occFromBack = true; }
+    else if (e.deliveredAt && e.deliveredAt > rf) { occEnd = e.deliveredAt; }
+    // No measured occupancy (an un-stamped run): the whole gap stays DD-eligible, exactly as
+    // v1.23 treated it. Without stamps there is no way to tell a stacked order from a filler,
+    // and inventing one would be worse than leaving the old behavior alone.
+    var occStop = occEnd ? Math.min(occEnd, nextAcc) : e.acceptedAtMs;
+    // Return leg still running when the next offer was accepted. Common and legitimate.
+    var overlap = (occEnd && occEnd > nextAcc) ? minBetween(nextAcc, occEnd) : 0;
+    var occRaw   = Math.max(0, minBetween(e.acceptedAtMs, occStop));
+    // A stamped break inside the run is genuinely off the clock, so it still comes out of the
+    // cycle -- but the amount is reported so the row still reconciles.
+    var occBreak = breakMinIn(e.acceptedAtMs, occStop);
+    var occOn    = Math.max(0, occRaw - occBreak);
+    // CYCLE_BREAK_MIN remains the backstop for a MISSED break tap; real stamps are preferred.
+    var idleOn   = minBetween(occStop, nextAcc)
+                 - breakMinIn(occStop, nextAcc)
+                 - ddWorkMinIn(log, occStop, nextAcc);
+    if (idleOn < 0) idleOn = 0;
+    var cyc = occOn + idleOn;
+    if (cyc > CYCLE_BREAK_MIN) {
+      // Record what was rejected and how far over it was, so a blank Cycle Min is never a
+      // mystery in the export. `cycleDropNew` marks the ones the v1.23 math would have scored,
+      // which is the exact size of the regression the coverage metric cares about.
+      e.cycleDropMin = cyc;
+      var v123 = minBetween(e.acceptedAtMs, nextAcc)
+               - breakMinIn(e.acceptedAtMs, nextAcc)
+               - ddWorkMinIn(log, e.acceptedAtMs, nextAcc);
+      e.cycleDropNew = (v123 > 0 && v123 <= CYCLE_BREAK_MIN);
+      cyclesDropped++;
+      if (e.cycleDropNew) cyclesDroppedNew++;
+      continue;
     }
+    if (cyc <= 0) continue;
+    cyclesScored++;
+    e.cycleMin = cyc;
+    e.realHr = (e.net || 0) / cyc * 60;
+    e.cycleBreakMin = occBreak;
+    e.cycleOverlapMin = overlap;
+    sumNet += (e.net || 0);
+    sumCycle += cyc;
+    if (occFromBack) e.idleMin = idleOn;
   }
   // Accept-to-accept realized rate. Blind to bookend dead time by construction.
   var cycleRealHr = sumCycle > 0 ? (sumNet / sumCycle * 60) : null;
@@ -2169,7 +2367,10 @@ function computeRealized(log, useShift) {
     workedMin: workedMin,
     shiftNet: shiftNet,
     breakMin: breakMinTotal(),
-    ddWorkMin: ddWorkMin
+    ddWorkMin: ddWorkMin,
+    cyclesScored: cyclesScored,
+    cyclesDropped: cyclesDropped,
+    cyclesDroppedNew: cyclesDroppedNew
   };
 }
 
@@ -2251,7 +2452,12 @@ function toggleShift() {
     // which excludes cleanly from the return model (a 0 would corrupt it). Stamps are preserved,
     // so if you did drive back you can add the Back tap in Edit.
     var openNow = allInflightIdxs();
-    for (var oi = 0; oi < openNow.length; oi++) offerLog[openNow[oi]].capDismissed = true;
+    for (var oi = 0; oi < openNow.length; oi++) {
+      offerLog[openNow[oi]].capDismissed = true;
+      // v1.24: label it, so a blank Return Min on this row reads as "shift ended here",
+      // not as a missed tap. Answers the question the CSV could not answer before.
+      if (!offerLog[openNow[oi]].closeReason) offerLog[openNow[oi]].closeReason = 'SHIFT-END';
+    }
     if (openNow.length) saveOfferLog();
     clearShiftPending();
   }
@@ -2298,6 +2504,154 @@ function toggleBreak() {
   }
   saveShift();
   renderAll();
+}
+
+// === v1.25 BREAK CORRECTION ==================================================
+// Until now a break could be started and ended and never touched again. One accidental press
+// on 07/22 logged 165 min against an actual 79, and that single number is subtracted in three
+// places at once: shift worked minutes (so Realized Net $/Shift Hr is overstated), every cycle
+// it overlaps (so those Real Net Hr are overstated), and the Break Min summary cell. There was
+// no in-app way to correct it, so the export shipped knowingly-wrong figures and the fix had to
+// be reapplied by hand in analysis every week. Now it is fixable at the source.
+// Same idioms as the rest of the app: no native dialogs, two-tap confirm to delete, and a
+// rejected edit explains itself in the note line rather than silently doing nothing.
+var breakEditOpen = false;
+var breakDeletePending = '';
+var breakEditSig = '';
+
+function toggleBreakEditor() {
+  breakEditOpen = !breakEditOpen;
+  breakDeletePending = '';
+  breakEditSig = '';
+  renderShiftBar();
+}
+
+// Rebuild a timestamp on the same calendar day as the block it belongs to, so editing a clock
+// time can never silently move a break onto another date.
+function breakTimeOnBlockDay(blockIdx, hhmmStr) {
+  var bl = shift.blocks[blockIdx];
+  if (!bl || !hhmmStr) return null;
+  var parts = String(hhmmStr).split(':');
+  if (parts.length < 2) return null;
+  var h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+  if (isNaN(h) || isNaN(m)) return null;
+  var d = new Date(bl.start);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, 0, 0).getTime();
+}
+
+function breakNote(msg, color) {
+  var n = document.getElementById('shiftNote');
+  if (!n) return;
+  n.textContent = msg;
+  n.style.color = color || 'var(--red)';
+}
+
+// which = 'start' | 'end'
+function setBreakTime(blockIdx, breakIdx, which, hhmmStr) {
+  var bl = shift.blocks[blockIdx];
+  if (!bl) return;
+  var br = bl.breaks[breakIdx];
+  if (!br) return;
+  var ms = breakTimeOnBlockDay(blockIdx, hhmmStr);
+  if (ms == null) { breakEditSig = ''; renderShiftBar(); return; }
+
+  var blockEnd = bl.stop || Date.now();
+  var newStart = which === 'start' ? ms : br.start;
+  var newEnd   = which === 'end'   ? ms : br.end;
+
+  // A break has to sit inside its own block and run forwards. Reject rather than clamp: a
+  // silently-adjusted correction is how you end up not trusting the number a second time.
+  if (newStart < bl.start || newStart > blockEnd) {
+    // renderShiftBar rewrites the note line, so the explanation goes AFTER it, not before.
+    breakEditSig = ''; renderShiftBar();
+    breakNote('break start must sit inside the block (' + hhmm(bl.start) + '-' + hhmm(blockEnd) + ')');
+    return;
+  }
+  if (newEnd != null && (newEnd < bl.start || newEnd > blockEnd)) {
+    breakEditSig = ''; renderShiftBar();
+    breakNote('break end must sit inside the block (' + hhmm(bl.start) + '-' + hhmm(blockEnd) + ')');
+    return;
+  }
+  if (newEnd != null && newEnd <= newStart) {
+    breakEditSig = ''; renderShiftBar();
+    breakNote('break end has to be after its start');
+    return;
+  }
+
+  br.start = newStart;
+  if (which === 'end') br.end = newEnd;
+  saveShift();
+  breakEditSig = '';
+  renderAll();
+  breakNote('break corrected -- shift hours and every cycle it touches recomputed', 'var(--green)');
+}
+
+function deleteBreak(blockIdx, breakIdx) {
+  var key = blockIdx + ':' + breakIdx;
+  if (breakDeletePending !== key) {
+    breakDeletePending = key;
+    breakEditSig = '';
+    renderShiftBar();
+    breakNote('tap the X again to remove that break');
+    return;
+  }
+  var bl = shift.blocks[blockIdx];
+  if (bl && bl.breaks[breakIdx]) bl.breaks.splice(breakIdx, 1);
+  breakDeletePending = '';
+  breakEditSig = '';
+  saveShift();
+  renderAll();
+  breakNote('break removed -- shift hours recomputed', 'var(--green)');
+}
+
+function renderBreakEditor() {
+  var row = document.getElementById('breakEditRow');
+  var list = document.getElementById('breakEditList');
+  var tog = document.getElementById('breakEditToggle');
+  if (!row || !list || !tog) return;
+
+  var total = 0, i, j;
+  for (i = 0; i < shift.blocks.length; i++) total += shift.blocks[i].breaks.length;
+  if (!total) { row.style.display = 'none'; breakEditOpen = false; return; }
+  row.style.display = 'block';
+  tog.textContent = breakEditOpen
+    ? 'done'
+    : 'fix a break (' + total + ' logged, ' + Math.round(breakMinTotal()) + 'm)';
+  list.style.display = breakEditOpen ? 'block' : 'none';
+  if (!breakEditOpen) { breakEditSig = ''; return; }
+
+  // Do not rewrite the markup while a time input is being edited unless something changed --
+  // an innerHTML rebuild mid-edit would drop focus on the phone.
+  var sig = breakDeletePending + '|';
+  for (i = 0; i < shift.blocks.length; i++) {
+    for (j = 0; j < shift.blocks[i].breaks.length; j++) {
+      var b = shift.blocks[i].breaks[j];
+      sig += i + ',' + j + ',' + b.start + ',' + (b.end || 0) + ';';
+    }
+  }
+  if (sig === breakEditSig) return;
+  breakEditSig = sig;
+
+  var html = '';
+  for (i = 0; i < shift.blocks.length; i++) {
+    var bl = shift.blocks[i];
+    for (j = 0; j < bl.breaks.length; j++) {
+      var br = bl.breaks[j];
+      var mins = br.end ? Math.round(minBetween(br.start, br.end)) : null;
+      var pend = (breakDeletePending === i + ':' + j);
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-family:var(--mono);font-size:11px;">'
+        + '<span style="color:var(--muted);width:34px;flex-shrink:0;">' + (shift.blocks.length > 1 ? 'b' + (i + 1) + ' ' : '') + '#' + (j + 1) + '</span>'
+        + '<input type="time" value="' + msToClock(br.start) + '" onchange="setBreakTime(' + i + ',' + j + ',\'start\',this.value)" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 5px;">'
+        + '<span style="color:var(--muted);">to</span>'
+        + (br.end
+            ? '<input type="time" value="' + msToClock(br.end) + '" onchange="setBreakTime(' + i + ',' + j + ',\'end\',this.value)" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 5px;">'
+            : '<span style="color:var(--amber);">open</span>')
+        + '<span style="color:' + (mins != null && mins >= 120 ? 'var(--amber)' : 'var(--muted)') + ';flex:1;text-align:right;">' + (mins != null ? mins + 'm' : '') + '</span>'
+        + '<button onclick="deleteBreak(' + i + ',' + j + ')" style="background:none;border:1px solid ' + (pend ? 'var(--red)' : 'var(--border)') + ';color:' + (pend ? 'var(--red)' : 'var(--muted)') + ';border-radius:6px;font-family:var(--mono);font-size:11px;width:24px;height:24px;cursor:pointer;flex-shrink:0;line-height:1;">x</button>'
+        + '</div>';
+    }
+  }
+  list.innerHTML = html;
 }
 
 // v1.23: BOTH platforms close on the Back tap now -- DD/UE captures a return leg too. A delivered
@@ -2357,6 +2711,9 @@ function lastOpenDeliveredIdx() {
 // Leaves the bar without fabricating stamps. Fix it properly in the edit modal.
 function dismissRun(i) {
   offerLog[i].capDismissed = true;
+  // v1.24: a dismiss is a MISSED tap, not a real end-of-shift. Both leave Back At blank, so
+  // without this label the CSV cannot tell a legitimately missing return leg from a lost one.
+  if (!offerLog[i].closeReason) offerLog[i].closeReason = 'DISMISSED';
   saveOfferLog();
   renderAll();
 }
@@ -2382,6 +2739,7 @@ function tapBack(i, kind) {
   if (!e.deliveredAt) e.deliveredAt = Date.now();   // missed Delivered tap: at least capture the pair
   e.backAt = Date.now();
   e.returnKind = kind;
+  e.closeReason = kind;   // v1.24: a real Back tap, as opposed to a dismiss or a shift-end
   saveOfferLog();
   renderAll();
 }
@@ -2418,6 +2776,7 @@ function renderShiftBar() {
   }
   var lb = lastBlock();
   document.getElementById('undoEndRow').style.display = (lb && lb.stop) ? 'block' : 'none';
+  renderBreakEditor();
   if (ob) {
     bbtn.textContent = 'BREAK END';
     bbtn.style.borderColor = 'var(--amber)'; bbtn.style.color = 'var(--amber)';
@@ -2857,15 +3216,55 @@ function renderExportSummary() {
   document.getElementById('lsTotal2').textContent    = pings;
   document.getElementById('lsAccepted2').textContent = accepted;
   document.getElementById('lsDeclined2').textContent = total - accepted;
-  // Auto-fill from the shift stamps unless the driver has overridden it. Today only --
-  // prev-day shift stamps are not retained.
-  if (!hoursManual && exportDay === 'today' && shiftStarted()) {
-    var wm = shiftWorkedMin();
-    if (wm > 0) document.getElementById('shiftHrsWorked').value = (Math.round(wm / 3) / 20).toFixed(2);
-  }
+  // v1.24 (AI-1): auto-fill from that day's shift blocks for BOTH days. Shift stamps ARE
+  // retained in the 14-day history, so the previous day computes exactly like today and
+  // exactly like Export All -- the three can no longer disagree.
+  var snap = snapForExportDay();
+  var auto = autoHoursStr(snap);
+  if (!hoursManual && auto !== '') document.getElementById('shiftHrsWorked').value = auto;
   var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
   var oph = hrs > 0 ? (pings / hrs).toFixed(1) : '--';
   document.getElementById('offersPerHr').textContent = oph;
+  // Make a divergence visible AT THE LINE. Realized $/shift-hr always divides by the stamps;
+  // if the box has been overridden to something else, the export would quietly carry two
+  // different denominators. Say so instead of hiding it.
+  var note = document.getElementById('hrsStampNote');
+  if (note) {
+    if (auto !== '' && Math.abs(hrs - parseFloat(auto)) >= 0.05) {
+      note.textContent = ' (stamps say ' + auto + ' -- tap to reset)';
+      note.style.color = 'var(--amber)';
+    } else {
+      note.textContent = '';
+      note.style.color = '';
+    }
+  }
+}
+
+// The shift record for whichever day the export toggle is pointing at, or null if that day
+// has no shift record (an older log from before stamps were retained). Not an error.
+function snapForExportDay() {
+  if (exportDay !== 'prev') return shiftStarted() ? shift : null;
+  var d = prevDate || '';
+  for (var i = 0; i < logHistory.length; i++) {
+    if (logHistory[i].date === d) return logHistory[i].shift || null;
+  }
+  return null;
+}
+
+// THE single definition of "hours worked" for a day: worked minutes across every block, each
+// minus its own breaks, to the nearest 3 min. Export All already did this; the summary cell and
+// the single prev-day export now call the same function rather than re-deriving or guessing.
+function autoHoursStr(snap) {
+  if (!snap || !snap.blocks || !snap.blocks.length) return '';
+  var wm = withShift(snap, function() { return shiftWorkedMin(); });
+  if (!(wm > 0)) return '';
+  return (Math.round(wm / 3) / 20).toFixed(2);
+}
+
+// Discard a manual override and fall back to the stamps.
+function resetHoursToStamps() {
+  hoursManual = false;
+  renderExportSummary();
 }
 
 // Builds one day's CSV block. Shared by the single-day export and the rolling archive so the
@@ -2912,9 +3311,27 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
   var shBreak = shiftSnap ? Math.round(R.breakMin) : '';
   var shDD    = shiftSnap ? Math.round(R.ddWorkMin) : '';
   var shReal  = (shiftSnap && R.shiftRealHr != null) ? R.shiftRealHr.toFixed(2) : '';
-  var summary = csvRow(['# Date', dateStr, 'Hours Worked', hrs, 'Offers', total, 'Accepted', accepted, 'Accepted Pay', acceptedPay.toFixed(2), 'Fare', fareSum.toFixed(2), 'Tip', tipSum.toFixed(2), 'Cash Tips', cashTips.toFixed(2), 'Earned', earnedSum.toFixed(2), 'Declined', (total - accepted), 'Shift Start', shStart, 'Shift Stop', shStop, 'Break Min', shBreak, 'DD Work Min', shDD, 'Realized Net $/Shift Hr', shReal, 'Shift Blocks', shBlocks]);
+  var summary = csvRow(['# Date', dateStr, 'Hours Worked', hrs, 'Offers', total, 'Accepted', accepted, 'Accepted Pay', acceptedPay.toFixed(2), 'Fare', fareSum.toFixed(2), 'Tip', tipSum.toFixed(2), 'Cash Tips', cashTips.toFixed(2), 'Earned', earnedSum.toFixed(2), 'Declined', (total - accepted), 'Shift Start', shStart, 'Shift Stop', shStop, 'Break Min', shBreak, 'DD Work Min', shDD, 'Realized Net $/Shift Hr', shReal, 'Shift Blocks', shBlocks,
+    // v1.25 APPENDED to the summary line -- cycle coverage for this day.
+    // Scored = cycles that produced a Real Net Hr. Dropped = over CYCLE_BREAK_MIN (90), read as
+    // a missed break tap. Dropped New = of those, the ones the v1.23 math would have scored,
+    // i.e. the coverage cost of the v1.24 cycle fix. Sum this column across a full re-export.
+    'Cycles Scored', R.cyclesScored, 'Cycles Dropped', R.cyclesDropped, 'Cycles Dropped New', R.cyclesDroppedNew]);
   // APPEND ONLY -- downstream parsing maps by position. Never reorder or rename.
-  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles','Actual Time','Actual Miles','Actual Items','Actual Fare','Actual Tip','Cash Tip','Actual Total','Actual Items A','Actual Items B','Ready At','Wait Min','Adjusted Est','Committed Min','Started At','Delivered At','Back At','Return Kind','Lag Min','Run Min','Return Min','Idle Min','Cycle Min','Real Net Hr'];
+  var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles','Actual Time','Actual Miles','Actual Items','Actual Fare','Actual Tip','Cash Tip','Actual Total','Actual Items A','Actual Items B','Ready At','Wait Min','Adjusted Est','Committed Min','Started At','Delivered At','Back At','Return Kind','Lag Min','Run Min','Return Min','Idle Min','Cycle Min','Real Net Hr',
+                 // --- v1.24 appends ---
+                 // Close Reason: how the run left the capture bar. B/N = a real Back tap.
+                 // SHIFT-END = the shift was ended with the run still open (legitimately no
+                 // return leg). DISMISSED = the X was tapped, i.e. a MISSED tap. Blank return
+                 // minutes used to be indistinguishable between those last two.
+                 // Cycle Break/Overlap: the reconciliation for the cycle.
+                 //   Lag + Run + Return + Idle == Cycle + Cycle Break Min + Cycle Overlap Min
+                 'Close Reason','Cycle Break Min','Cycle Overlap Min',
+                 // --- v1.25 append ---
+                 // Cycle Drop Min: the cycle that was REJECTED for exceeding CYCLE_BREAK_MIN,
+                 // so a blank Cycle Min is explainable from the row. NEW = the v1.23 math would
+                 // have scored this one.
+                 'Cycle Drop Min','Cycle Drop New'];
   var rows = src.map(function(e) {
     var hasM = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
     var actTotal = hasM ? ((parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0)).toFixed(2) : '';
@@ -2952,7 +3369,14 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
       e.returnMin == null ? '' : Math.round(e.returnMin),
       e.idleMin   == null ? '' : Math.round(e.idleMin),
       e.cycleMin  == null ? '' : Math.round(e.cycleMin),
-      e.realHr    == null ? '' : e.realHr.toFixed(2)
+      e.realHr    == null ? '' : e.realHr.toFixed(2),
+      // --- v1.24 appends ---
+      e.closeReason || '',
+      e.cycleBreakMin   == null ? '' : Math.round(e.cycleBreakMin),
+      e.cycleOverlapMin == null ? '' : Math.round(e.cycleOverlapMin),
+      // --- v1.25 appends ---
+      e.cycleDropMin == null ? '' : Math.round(e.cycleDropMin),
+      e.cycleDropNew ? 'NEW' : ''
     ]);
   });
 
@@ -2975,18 +3399,17 @@ function exportCSV() {
     alert(exportDay === 'prev' ? 'No previous day log saved.' : 'No offers logged today yet.');
     return;
   }
-  var hrs = parseFloat(document.getElementById('shiftHrsWorked').value) || 0;
   var isPrev = (exportDay === 'prev');
   var dateStr = (isPrev && prevDate) ? prevDate : todayKey();
-  // Prev-day shift stamps only exist if that day made it into the rolling history.
-  var snap = null;
-  if (isPrev) {
-    for (var i = 0; i < logHistory.length; i++) {
-      if (logHistory[i].date === dateStr) { snap = logHistory[i].shift; break; }
-    }
-  } else {
-    snap = shiftStarted() ? shift : null;
-  }
+  // Prev-day shift stamps exist whenever that day made it into the rolling history.
+  var snap = snapForExportDay();
+  // v1.24: unless the driver deliberately overrode it, the exported Hours Worked comes from
+  // the same blocks the realized $/shift-hr divides by. Belt and braces -- renderExportSummary
+  // has already put this value in the box, so what shipped is what was on screen.
+  var auto = autoHoursStr(snap);
+  var hrs = (!hoursManual && auto !== '')
+    ? auto
+    : (parseFloat(document.getElementById('shiftHrsWorked').value) || 0);
   downloadCsv(buildCsvFor(src, dateStr, snap, hrs), 'offers_' + dateStr + '.csv');
 }
 
@@ -2999,7 +3422,7 @@ function exportAllCSV() {
   var blocks = [];
   for (var i = 0; i < days.length; i++) {
     var snap = days[i].shift || null;
-    var dh = snap ? withShift(snap, function() { return (Math.round(shiftWorkedMin() / 3) / 20).toFixed(2); }) : '';
+    var dh = autoHoursStr(snap);   // v1.24: shared with the single-day export -- one definition
     blocks.push(buildCsvFor(days[i].log, days[i].date, snap, dh));
   }
   downloadCsv(blocks.join('\r\n\r\n'), 'offers_all_' + todayKey() + '.csv');
@@ -3113,7 +3536,7 @@ function saveEdit() {
   var realisticMin = adjustedEst;   // hard decline excludes the Phase D wait (advisory, see analyze)
   var timeRisk = !isDDUE && realisticMin >= HARD_DECLINE_MIN;
   var gasSafe  = (ppm >= SPARK_GAS_PPM) && (net > 0);
-  var acceptAt = payForAccept(SPARK_ACCEPT_HR, netHrMin, gasCost, totalMi);
+  var acceptAt = payForAccept(acceptTargetFor(isDDUE), netHrMin, gasCost, totalMi);
 
   var vWord, showThresh = false;
   if (isDDUE) {
@@ -3257,7 +3680,7 @@ function analyze() {
   // Gas safety: PPM clears floor AND net positive
   var gasSafe = (ppm >= SPARK_GAS_PPM) && (net > 0);
   // Pay needed to reach the ACCEPT net/hr line (and clear gas floor)
-  var acceptAt = payForAccept(SPARK_ACCEPT_HR, netHrMin, gasCost, totalMiles);
+  var acceptAt = payForAccept(acceptTargetFor(isDDUE), netHrMin, gasCost, totalMiles);
 
   var vClass, vWord, vReason, showThresh = false;
 
@@ -3314,7 +3737,7 @@ function analyze() {
     thresh.textContent = 'Check est time? ' + miles.toFixed(1) + 'mi in ' + estMin + 'min implies ' + (miles/(estMin/60)).toFixed(0) + ' mph -- likely a typo.';
   } else if (!isDDUE) {
     // v1.23 Change 3: the pay floor is shown on EVERY Spark offer, not just marginal/decline.
-    // acceptAt = payForAccept(16, committed incl. return+lag, gas) -- the driver-facing floor.
+    // acceptAt = payForAccept(this platform's gate, committed incl. return+lag, gas).
     thresh.style.display = 'block';
     thresh.style.color = '';
     var floorTxt;
