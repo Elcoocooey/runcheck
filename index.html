@@ -1,6 +1,53 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.25
+  RunCheck v1.27
+  v1.27: PAST-DAY BREAK CORRECTION. v1.25 made today's breaks fixable; this makes ANY retained
+         day fixable. A mis-stamped break is almost never noticed on the day -- it is noticed
+         when the numbers are looked at, by which point the day has closed and the correction
+         was permanent. Since a bad break is subtracted in three places at once (shift worked
+         minutes, every cycle it overlaps, and the Break Min cell), every un-fixed one was a
+         standing manual patch in analysis.
+         Nothing had to be reconstructed: the 14-day history already holds each day's shift
+         record. Correct the snapshot and Hours Worked, Realized Net $/Shift Hr and every cycle
+         for that day recompute on the next export, from the same stamps.
+         "fix a break on another day" lives in the Export pane -- where a day's numbers are
+         looked at, which is when a bad break gets noticed. Lists every retained day with a
+         shift record, newest first, with its break count and total; tap a day to edit it.
+         Today appears in BOTH editors and points at the same live object, so an edit made in
+         one is the edit made in the other. Same idioms: no native dialogs, two-tap confirm to
+         delete, rejected edits explain themselves, and a corrected past day says to re-export.
+         Row markup is shared between the two editors so they cannot drift apart.
+         NOTE: correcting a past day changes what that day EXPORTS, not any CSV already
+         downloaded. Re-export the day (or EXPORT ALL) to pick the correction up.
+         No gate, threshold or constant moved. CSV unchanged -- no new columns this build.
+         STILL HELD, not built: lag 4 -> 6, and the high-item cap.
+  v1.26: CYCLE COVERAGE. 24 of 107 accepts had no cycle. This build accounts for all 24 and
+         recovers most of them. No gate, threshold or constant moved; CYCLE_BREAK_MIN stays 90
+         (Cycles Dropped New came back 0 across 14 days -- no regression to answer for).
+         (1) CYCLES NOW CLOSE AT SHIFT STOP. A cycle used to require a NEXT ACCEPT, so the last
+             run of every day scored nothing -- 13 of the 24, one run per day permanently
+             outside the coverage metric. When the shift has ended, Shift Stop is a real
+             boundary: the run is over and the clock stopped. Close there.
+             The same rule fixes a quieter case: on a split-shift day the last run of block 1
+             paired against the first accept of block 2 and dragged the whole off-clock gap
+             between stretches into its cycle (often tripping the 90-min backstop). A cycle now
+             never crosses the end of the block it started in. A still-open block is unchanged.
+         (2) RUNS ARE PAIRED IN TIME ORDER, not array order. The log is append-ordered, which is
+             normally the same thing -- until a hand-logged row or an edited Time puts an entry
+             out of sequence, and a run gets paired against an EARLIER accept. That is the
+             07/18 11:43 AM row: complete stamps, negative gap, cycle computed as 0, skipped by
+             the `cyc <= 0` guard with no drop value recorded. It was the only unexplained blank
+             of the 24, and sorting fixes both it and any future mis-pairing.
+         (3) CYCLE NOTE explains EVERY accept. No blank Cycle Min is a mystery again:
+             ACCEPT / SHIFT-STOP / DD-OCCUPIED / LAST-OPEN / GAP>90 / ZERO-SPAN / NO-ACCEPT-TIME.
+         (4) RECONCILIATION TOLERANCE, measured not assumed. The float identity is EXACT --
+             verified over 35,717 randomised rows, residual 0 to within 1e-6 on every one. The
+             CSV rounds seven terms independently, so the INTEGER residual is noise: measured
+             distribution -2 0.34% / -1 20.0% / 0 59.1% / +1 20.2% / +2 0.34%.
+             |resid| <= 1 is NOT a safe check -- it false-alarms about 1 row in 150. Use
+             |resid| <= 2. Anything beyond 2 is a real defect, not rounding.
+         CSV: one column APPENDED (Cycle Note). No existing column reordered or renamed.
+         STILL HELD, not built: lag 4 -> 6, and the high-item cap.
   v1.25: THE GAS DEFAULT, AND TWO NUMBERS THAT DISAGREED WITH THEMSELVES.
          (1) GAS DEFAULT 0.224 -> 0.3175. Per-row derivation across 243 offers showed the rate
              the gate actually used stepping 0.2519 (07/20) -> 0.281 -> 0.284 -> 0.3175 (07/26):
@@ -1024,6 +1071,11 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       </div>
       <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">hrs &nbsp;&middot;&nbsp; <span id="offersPerHr">--</span> offers/hr<span id="hrsStampNote" onclick="resetHoursToStamps()" style="cursor:pointer;"></span></div>
     </div>
+    <div id="pastBreakRow" style="display:none;margin-bottom:10px;">
+      <button id="pastBreakToggle" onclick="togglePastBreaks()" style="background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;text-decoration:underline;width:100%;text-align:center;">fix a break on another day</button>
+      <div id="pastBreakBody" style="display:none;margin-top:6px;"></div>
+      <div id="pastBreakNote" style="font-size:10px;color:var(--muted);margin-top:4px;text-align:center;"></div>
+    </div>
     <button class="export-btn" id="exportBtn" onclick="exportCSV()">DOWNLOAD TODAY'S CSV</button>
     <div class="export-info">Downloads a CSV of all offers checked including hours worked.<br>Add to your weekly offer tracking workbook.</div>
     <button class="export-btn" id="exportAllBtn" onclick="exportAllCSV()" style="margin-top:10px;background:var(--surface2);border:1.5px solid var(--blue);color:var(--blue);">EXPORT ALL (<span id="histCount">0</span> DAYS)</button>
@@ -1619,6 +1671,18 @@ function ddWorkMinIn(log, a, b) {
     if (en > s) t += minBetween(s, en);
   }
   return t;
+}
+// v1.26: the stop time of the block a timestamp falls inside, or null if that block is still
+// open / the timestamp sits outside every block. Used to close a cycle at the end of a work
+// stretch instead of running it into the next one.
+function blockStopFor(ms) {
+  if (!ms) return null;
+  for (var i = 0; i < shift.blocks.length; i++) {
+    var bl = shift.blocks[i];
+    var end = bl.stop;
+    if (ms >= bl.start && (end == null || ms <= end)) return end;
+  }
+  return null;
 }
 function shiftIsOpenLegacy() { return shiftIsOpen(); }
 // Shift denominator: worked time summed across EVERY block, each minus its own breaks.
@@ -2251,7 +2315,13 @@ function computeRealized(log, useShift) {
     e = log[i];
     e.cycleMin = null; e.realHr = null; e.runMin = null; e.returnMin = null; e.idleMin = null; e.lagMin = null;
     e.cycleBreakMin = null; e.cycleOverlapMin = null; e.cycleDropMin = null; e.cycleDropNew = false;
-    if (!e.accepted || !e.acceptedAtMs) continue;
+    e.cycleNote = null;
+    if (!e.accepted || !e.acceptedAtMs) {
+      // v1.26: a hand-logged row that was never accepted through the app has no accept stamp,
+      // so it can never have a cycle. Say so rather than leaving a blank to be investigated.
+      if (e.accepted && !e.acceptedAtMs) e.cycleNote = 'NO-ACCEPT-TIME';
+      continue;
+    }
     if (e.startedAt && e.startedAt > e.acceptedAtMs) e.lagMin = minBetween(e.acceptedAtMs, e.startedAt);
     var runFrom = e.startedAt || e.acceptedAtMs;
     if (e.platform === 'DD/UE') {
@@ -2266,12 +2336,20 @@ function computeRealized(log, useShift) {
         }
         // Give the DD row its own realized rate over its occupied time (no blank Real Net Hr).
         var ddCycle = e.runMin + (e.returnMin || 0);
-        if (ddCycle > 0) { e.cycleMin = ddCycle; e.realHr = (e.net || 0) / ddCycle * 60; }
+        if (ddCycle > 0) { e.cycleMin = ddCycle; e.realHr = (e.net || 0) / ddCycle * 60; e.cycleNote = 'DD-OCCUPIED'; }
       }
       continue;
     }
     runs.push(e);
   }
+  // v1.26: PAIR IN TIME ORDER, not array order. Cycles are accept-to-accept, so the "next" run
+  // has to be the next one CHRONOLOGICALLY. The log is append-ordered, which is normally the
+  // same thing -- but a hand-logged row or an edited Time puts it out of sequence, and then a
+  // run gets paired against an EARLIER accept. That produced the 07/18 11:43 AM row: complete
+  // stamps, negative gap, cycle computed as 0, skipped by the `cyc <= 0` guard with no drop
+  // value recorded -- the one genuinely unexplained blank. Sorting fixes the row and, more to
+  // the point, stops any other out-of-order entry from silently mis-pairing a cycle.
+  runs.sort(function(a, b) { return a.acceptedAtMs - b.acceptedAtMs; });
   var sumNet = 0, sumCycle = 0;
   // v1.25 COVERAGE DIAGNOSTIC. A cycle over CYCLE_BREAK_MIN is discarded as a missed break tap.
   // The v1.24 cycle fix stopped subtracting overlapping DD minutes, so some cycles are larger
@@ -2285,8 +2363,28 @@ function computeRealized(log, useShift) {
     if (e.deliveredAt && e.deliveredAt > rf) e.runMin = minBetween(rf, e.deliveredAt);
     if (e.backAt && e.deliveredAt && e.backAt > e.deliveredAt) e.returnMin = minBetween(e.deliveredAt, e.backAt);
     var nxt = runs[i + 1];
-    if (!nxt) continue;                 // last run of day: idle/cycle blank. Expected, not an error.
-    var nextAcc = nxt.acceptedAtMs;
+    // === v1.26: CLOSE THE CYCLE AT SHIFT STOP ================================
+    // The cycle used to need a NEXT ACCEPT to exist, so the last run of every day scored
+    // nothing -- 13 of 107 accepts across 14 days, one run per day silently outside the
+    // coverage metric. But when the shift has ended, Shift Stop IS a real boundary: the run is
+    // over and the clock stopped. Close there.
+    // The same rule fixes a quieter case: the last run of block 1 on a split-shift day used to
+    // pair against the first accept of block 2, dragging the entire off-clock gap between
+    // stretches into the cycle (and often tripping the 90-min backstop). A cycle now never
+    // crosses the end of the block it started in.
+    // A still-open block returns null and behaves exactly as before -- nothing is closed early.
+    var stopAt = blockStopFor(e.acceptedAtMs);
+    var nextAcc, cycleNote;
+    if (nxt && (stopAt == null || nxt.acceptedAtMs <= stopAt)) {
+      nextAcc = nxt.acceptedAtMs; cycleNote = 'ACCEPT';
+    } else if (stopAt != null && stopAt > e.acceptedAtMs) {
+      nextAcc = stopAt; cycleNote = 'SHIFT-STOP';
+    } else if (!nxt) {
+      e.cycleNote = 'LAST-OPEN';        // last run, shift still running: nothing to close against
+      continue;
+    } else {
+      nextAcc = nxt.acceptedAtMs; cycleNote = 'ACCEPT';
+    }
     // === v1.24 CYCLE FIX =====================================================
     // v1.23 computed the cycle as (gap - all stamped breaks - ALL DD work in the gap) and
     // computed idle separately from Back. Nothing tied the two together, so on 6 of 53 runs
@@ -2333,11 +2431,19 @@ function computeRealized(log, useShift) {
                - breakMinIn(e.acceptedAtMs, nextAcc)
                - ddWorkMinIn(log, e.acceptedAtMs, nextAcc);
       e.cycleDropNew = (v123 > 0 && v123 <= CYCLE_BREAK_MIN);
+      e.cycleNote = 'GAP>' + CYCLE_BREAK_MIN;
       cyclesDropped++;
       if (e.cycleDropNew) cyclesDroppedNew++;
       continue;
     }
-    if (cyc <= 0) continue;
+    if (cyc <= 0) {
+      // Should now be unreachable for chronologically-ordered stamps. Labelled rather than
+      // dropped in silence, because "no cycle and no reason" is what cost a day of diagnosis.
+      e.cycleNote = 'ZERO-SPAN';
+      cyclesDropped++;
+      continue;
+    }
+    e.cycleNote = cycleNote;
     cyclesScored++;
     e.cycleMin = cyc;
     e.realHr = (e.net || 0) / cyc * 60;
@@ -2506,18 +2612,24 @@ function toggleBreak() {
   renderAll();
 }
 
-// === v1.25 BREAK CORRECTION ==================================================
-// Until now a break could be started and ended and never touched again. One accidental press
-// on 07/22 logged 165 min against an actual 79, and that single number is subtracted in three
-// places at once: shift worked minutes (so Realized Net $/Shift Hr is overstated), every cycle
-// it overlaps (so those Real Net Hr are overstated), and the Break Min summary cell. There was
-// no in-app way to correct it, so the export shipped knowingly-wrong figures and the fix had to
-// be reapplied by hand in analysis every week. Now it is fixable at the source.
-// Same idioms as the rest of the app: no native dialogs, two-tap confirm to delete, and a
-// rejected edit explains itself in the note line rather than silently doing nothing.
-var breakEditOpen = false;
+// === BREAK CORRECTION (v1.25) -- ANY RETAINED DAY (v1.27) ====================
+// A break could once be started and ended and never touched again. One accidental press logged
+// 165 min against an actual 79, and that single number is subtracted in three places at once:
+// shift worked minutes (so Realized Net $/Shift Hr is overstated), every cycle it overlaps (so
+// those Real Net Hr are overstated), and the Break Min summary cell.
+// v1.25 made today's breaks fixable. v1.27 makes ANY retained day fixable, because the mis-stamp
+// is usually not noticed until the numbers are looked at -- by which point the day has closed and
+// the correction was permanent. The 14-day history already holds each day's shift record, so
+// there is nothing to reconstruct: correct the snapshot and Hours Worked, Realized Net $/Shift
+// Hr and every cycle for that day all recompute on the next export, from the same stamps.
+// Same idioms throughout: no native dialogs, two-tap confirm to delete, and a rejected edit
+// explains itself rather than silently doing nothing.
+var breakEditOpen = false;      // shift-bar editor (today, at the line)
 var breakDeletePending = '';
 var breakEditSig = '';
+var pastBreakOpen = false;      // export-panel editor (any retained day)
+var pastBreakDay = '';
+var pastBreakSig = '';
 
 function toggleBreakEditor() {
   breakEditOpen = !breakEditOpen;
@@ -2526,10 +2638,38 @@ function toggleBreakEditor() {
   renderShiftBar();
 }
 
+// Every day whose breaks can be edited: the live shift plus each retained day that has a shift
+// record. Newest first. Today appears once, pointing at the LIVE object, so an edit made here
+// and an edit made in the shift bar are the same edit.
+function editableShiftDays() {
+  var out = [], seen = {}, today = shift.date || todayKey();
+  if (shiftStarted()) { out.push({ date: today, rec: shift, live: true }); seen[today] = 1; }
+  for (var i = logHistory.length - 1; i >= 0; i--) {
+    var d = logHistory[i];
+    if (!d || seen[d.date]) continue;
+    if (!d.shift || !d.shift.blocks || !d.shift.blocks.length) continue;
+    out.push({ date: d.date, rec: d.shift, live: false });
+    seen[d.date] = 1;
+  }
+  return out;
+}
+
+// Resolve a date key to its shift record. Returns null if that day has no shift stamps.
+function shiftRecordFor(dateKey) {
+  var days = editableShiftDays();
+  for (var i = 0; i < days.length; i++) if (days[i].date === dateKey) return days[i];
+  return null;
+}
+
+// The live shift and the history are different stores -- write to whichever one owns this day.
+function persistShiftRecord(live) {
+  if (live) saveShift(); else saveHistory();
+}
+
 // Rebuild a timestamp on the same calendar day as the block it belongs to, so editing a clock
-// time can never silently move a break onto another date.
-function breakTimeOnBlockDay(blockIdx, hhmmStr) {
-  var bl = shift.blocks[blockIdx];
+// time can never silently move a break onto another date -- which matters far more for a past
+// day than it did for today.
+function breakTimeOnBlockDay(bl, hhmmStr) {
   if (!bl || !hhmmStr) return null;
   var parts = String(hhmmStr).split(':');
   if (parts.length < 2) return null;
@@ -2539,69 +2679,116 @@ function breakTimeOnBlockDay(blockIdx, hhmmStr) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, 0, 0).getTime();
 }
 
-function breakNote(msg, color) {
-  var n = document.getElementById('shiftNote');
+// Messages land on whichever note line belongs to the editor in use.
+function breakNote(msg, color, past) {
+  var n = document.getElementById(past ? 'pastBreakNote' : 'shiftNote');
   if (!n) return;
   n.textContent = msg;
   n.style.color = color || 'var(--red)';
 }
 
+function afterBreakEdit(day, msg, color) {
+  var past = !day.live;
+  persistShiftRecord(day.live);
+  breakEditSig = ''; pastBreakSig = '';
+  renderAll();
+  renderPastBreaks();
+  if (document.getElementById('lpane-export')) renderExportSummary();
+  breakNote(msg, color || 'var(--green)', past);
+}
+
+function rejectBreakEdit(day, msg) {
+  var past = !day.live;
+  breakEditSig = ''; pastBreakSig = '';
+  if (past) renderPastBreaks(); else renderShiftBar();
+  breakNote(msg, 'var(--red)', past);
+}
+
 // which = 'start' | 'end'
-function setBreakTime(blockIdx, breakIdx, which, hhmmStr) {
-  var bl = shift.blocks[blockIdx];
+function setBreakTime(dateKey, blockIdx, breakIdx, which, hhmmStr) {
+  var day = shiftRecordFor(dateKey);
+  if (!day) return;
+  var bl = day.rec.blocks[blockIdx];
   if (!bl) return;
   var br = bl.breaks[breakIdx];
   if (!br) return;
-  var ms = breakTimeOnBlockDay(blockIdx, hhmmStr);
-  if (ms == null) { breakEditSig = ''; renderShiftBar(); return; }
+  var ms = breakTimeOnBlockDay(bl, hhmmStr);
+  if (ms == null) { rejectBreakEdit(day, 'could not read that time'); return; }
 
-  var blockEnd = bl.stop || Date.now();
+  // A closed block ends at its stop; only a still-open block runs to now.
+  var blockEnd = bl.stop || (day.live ? Date.now() : bl.start);
   var newStart = which === 'start' ? ms : br.start;
   var newEnd   = which === 'end'   ? ms : br.end;
 
   // A break has to sit inside its own block and run forwards. Reject rather than clamp: a
   // silently-adjusted correction is how you end up not trusting the number a second time.
   if (newStart < bl.start || newStart > blockEnd) {
-    // renderShiftBar rewrites the note line, so the explanation goes AFTER it, not before.
-    breakEditSig = ''; renderShiftBar();
-    breakNote('break start must sit inside the block (' + hhmm(bl.start) + '-' + hhmm(blockEnd) + ')');
+    rejectBreakEdit(day, 'break start must sit inside the block (' + hhmm(bl.start) + '-' + hhmm(blockEnd) + ')');
     return;
   }
   if (newEnd != null && (newEnd < bl.start || newEnd > blockEnd)) {
-    breakEditSig = ''; renderShiftBar();
-    breakNote('break end must sit inside the block (' + hhmm(bl.start) + '-' + hhmm(blockEnd) + ')');
+    rejectBreakEdit(day, 'break end must sit inside the block (' + hhmm(bl.start) + '-' + hhmm(blockEnd) + ')');
     return;
   }
   if (newEnd != null && newEnd <= newStart) {
-    breakEditSig = ''; renderShiftBar();
-    breakNote('break end has to be after its start');
+    rejectBreakEdit(day, 'break end has to be after its start');
     return;
   }
 
   br.start = newStart;
   if (which === 'end') br.end = newEnd;
-  saveShift();
-  breakEditSig = '';
-  renderAll();
-  breakNote('break corrected -- shift hours and every cycle it touches recomputed', 'var(--green)');
+  afterBreakEdit(day, day.live
+    ? 'break corrected -- shift hours and every cycle it touches recomputed'
+    : dateKey + ' corrected -- re-export that day to pick it up');
 }
 
-function deleteBreak(blockIdx, breakIdx) {
-  var key = blockIdx + ':' + breakIdx;
+function deleteBreak(dateKey, blockIdx, breakIdx) {
+  var day = shiftRecordFor(dateKey);
+  if (!day) return;
+  var key = dateKey + ':' + blockIdx + ':' + breakIdx;
   if (breakDeletePending !== key) {
     breakDeletePending = key;
-    breakEditSig = '';
-    renderShiftBar();
-    breakNote('tap the X again to remove that break');
+    breakEditSig = ''; pastBreakSig = '';
+    if (day.live) renderShiftBar(); else renderPastBreaks();
+    breakNote('tap the X again to remove that break', 'var(--red)', !day.live);
     return;
   }
-  var bl = shift.blocks[blockIdx];
+  var bl = day.rec.blocks[blockIdx];
   if (bl && bl.breaks[breakIdx]) bl.breaks.splice(breakIdx, 1);
   breakDeletePending = '';
-  breakEditSig = '';
-  saveShift();
-  renderAll();
-  breakNote('break removed -- shift hours recomputed', 'var(--green)');
+  afterBreakEdit(day, day.live
+    ? 'break removed -- shift hours recomputed'
+    : dateKey + ' break removed -- re-export that day to pick it up');
+}
+
+// Shared row markup, so the at-the-line editor and the past-day editor can never drift apart.
+function breakRowsHtml(dateKey, rec) {
+  var html = '', multi = rec.blocks.length > 1;
+  for (var i = 0; i < rec.blocks.length; i++) {
+    var bl = rec.blocks[i];
+    for (var j = 0; j < bl.breaks.length; j++) {
+      var br = bl.breaks[j];
+      var mins = br.end ? Math.round(minBetween(br.start, br.end)) : null;
+      var pend = (breakDeletePending === dateKey + ':' + i + ':' + j);
+      var args = "'" + dateKey + "'," + i + "," + j;
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-family:var(--mono);font-size:11px;">'
+        + '<span style="color:var(--muted);width:34px;flex-shrink:0;">' + (multi ? 'b' + (i + 1) + ' ' : '') + '#' + (j + 1) + '</span>'
+        + '<input type="time" value="' + msToClock(br.start) + '" onchange="setBreakTime(' + args + ',\'start\',this.value)" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 5px;">'
+        + '<span style="color:var(--muted);">to</span>'
+        + (br.end
+            ? '<input type="time" value="' + msToClock(br.end) + '" onchange="setBreakTime(' + args + ',\'end\',this.value)" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 5px;">'
+            : '<span style="color:var(--amber);">open</span>')
+        + '<span style="color:' + (mins != null && mins >= 120 ? 'var(--amber)' : 'var(--muted)') + ';flex:1;text-align:right;">' + (mins != null ? mins + 'm' : '') + '</span>'
+        + '<button onclick="deleteBreak(' + args + ')" style="background:none;border:1px solid ' + (pend ? 'var(--red)' : 'var(--border)') + ';color:' + (pend ? 'var(--red)' : 'var(--muted)') + ';border-radius:6px;font-family:var(--mono);font-size:11px;width:24px;height:24px;cursor:pointer;flex-shrink:0;line-height:1;">x</button>'
+        + '</div>';
+    }
+  }
+  return html;
+}
+
+// Total break minutes on an arbitrary shift record.
+function breakMinTotalFor(rec) {
+  return withShift(rec, function() { return breakMinTotal(); });
 }
 
 function renderBreakEditor() {
@@ -2610,7 +2797,7 @@ function renderBreakEditor() {
   var tog = document.getElementById('breakEditToggle');
   if (!row || !list || !tog) return;
 
-  var total = 0, i, j;
+  var total = 0, i;
   for (i = 0; i < shift.blocks.length; i++) total += shift.blocks[i].breaks.length;
   if (!total) { row.style.display = 'none'; breakEditOpen = false; return; }
   row.style.display = 'block';
@@ -2622,36 +2809,65 @@ function renderBreakEditor() {
 
   // Do not rewrite the markup while a time input is being edited unless something changed --
   // an innerHTML rebuild mid-edit would drop focus on the phone.
-  var sig = breakDeletePending + '|';
-  for (i = 0; i < shift.blocks.length; i++) {
-    for (j = 0; j < shift.blocks[i].breaks.length; j++) {
-      var b = shift.blocks[i].breaks[j];
-      sig += i + ',' + j + ',' + b.start + ',' + (b.end || 0) + ';';
-    }
-  }
+  var dateKey = shift.date || todayKey();
+  var sig = breakDeletePending + '|' + JSON.stringify(shift.blocks);
   if (sig === breakEditSig) return;
   breakEditSig = sig;
+  list.innerHTML = breakRowsHtml(dateKey, shift);
+}
+
+// v1.27: the past-day editor. Lives in the Export pane because that is where a day's numbers
+// are looked at, which is when a bad break is noticed.
+function togglePastBreaks() {
+  pastBreakOpen = !pastBreakOpen;
+  if (!pastBreakOpen) pastBreakDay = '';
+  breakDeletePending = '';
+  pastBreakSig = '';
+  renderPastBreaks();
+}
+
+function selectPastBreakDay(dateKey) {
+  pastBreakDay = (pastBreakDay === dateKey) ? '' : dateKey;
+  breakDeletePending = '';
+  pastBreakSig = '';
+  renderPastBreaks();
+}
+
+function renderPastBreaks() {
+  var row = document.getElementById('pastBreakRow');
+  var body = document.getElementById('pastBreakBody');
+  var tog = document.getElementById('pastBreakToggle');
+  if (!row || !body || !tog) return;
+
+  var days = editableShiftDays();
+  if (!days.length) { row.style.display = 'none'; pastBreakOpen = false; return; }
+  row.style.display = 'block';
+  tog.textContent = pastBreakOpen ? 'done' : 'fix a break on another day (' + days.length + ' retained)';
+  body.style.display = pastBreakOpen ? 'block' : 'none';
+  if (!pastBreakOpen) { pastBreakSig = ''; return; }
+
+  var sig = pastBreakDay + '|' + breakDeletePending + '|' + JSON.stringify(days.map(function(d) { return [d.date, d.rec.blocks]; }));
+  if (sig === pastBreakSig) return;
+  pastBreakSig = sig;
 
   var html = '';
-  for (i = 0; i < shift.blocks.length; i++) {
-    var bl = shift.blocks[i];
-    for (j = 0; j < bl.breaks.length; j++) {
-      var br = bl.breaks[j];
-      var mins = br.end ? Math.round(minBetween(br.start, br.end)) : null;
-      var pend = (breakDeletePending === i + ':' + j);
-      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-family:var(--mono);font-size:11px;">'
-        + '<span style="color:var(--muted);width:34px;flex-shrink:0;">' + (shift.blocks.length > 1 ? 'b' + (i + 1) + ' ' : '') + '#' + (j + 1) + '</span>'
-        + '<input type="time" value="' + msToClock(br.start) + '" onchange="setBreakTime(' + i + ',' + j + ',\'start\',this.value)" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 5px;">'
-        + '<span style="color:var(--muted);">to</span>'
-        + (br.end
-            ? '<input type="time" value="' + msToClock(br.end) + '" onchange="setBreakTime(' + i + ',' + j + ',\'end\',this.value)" style="background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 5px;">'
-            : '<span style="color:var(--amber);">open</span>')
-        + '<span style="color:' + (mins != null && mins >= 120 ? 'var(--amber)' : 'var(--muted)') + ';flex:1;text-align:right;">' + (mins != null ? mins + 'm' : '') + '</span>'
-        + '<button onclick="deleteBreak(' + i + ',' + j + ')" style="background:none;border:1px solid ' + (pend ? 'var(--red)' : 'var(--border)') + ';color:' + (pend ? 'var(--red)' : 'var(--muted)') + ';border-radius:6px;font-family:var(--mono);font-size:11px;width:24px;height:24px;cursor:pointer;flex-shrink:0;line-height:1;">x</button>'
+  for (var i = 0; i < days.length; i++) {
+    var d = days[i];
+    var n = 0;
+    for (var b = 0; b < d.rec.blocks.length; b++) n += d.rec.blocks[b].breaks.length;
+    var mins = Math.round(breakMinTotalFor(d.rec));
+    var sel = (pastBreakDay === d.date);
+    html += '<button onclick="selectPastBreakDay(\'' + d.date + '\')" style="display:block;width:100%;text-align:left;background:' + (sel ? 'var(--surface2)' : 'none') + ';border:1px solid ' + (sel ? 'var(--blue)' : 'var(--border)') + ';border-radius:8px;color:var(--text);font-family:var(--mono);font-size:11px;padding:6px 8px;margin-bottom:5px;cursor:pointer;">'
+      + d.date + (d.live ? ' (today)' : '')
+      + '<span style="float:right;color:' + (mins >= 120 ? 'var(--amber)' : 'var(--muted)') + ';">' + n + ' break' + (n === 1 ? '' : 's') + ', ' + mins + 'm</span>'
+      + '</button>';
+    if (sel) {
+      html += '<div style="padding:4px 0 8px 0;">'
+        + (n ? breakRowsHtml(d.date, d.rec) : '<div style="font-size:10px;color:var(--muted);text-align:center;padding:4px;">no breaks logged that day</div>')
         + '</div>';
     }
   }
-  list.innerHTML = html;
+  body.innerHTML = html;
 }
 
 // v1.23: BOTH platforms close on the Back tap now -- DD/UE captures a return leg too. A delivered
@@ -3228,6 +3444,7 @@ function renderExportSummary() {
   // Make a divergence visible AT THE LINE. Realized $/shift-hr always divides by the stamps;
   // if the box has been overridden to something else, the export would quietly carry two
   // different denominators. Say so instead of hiding it.
+  renderPastBreaks();
   var note = document.getElementById('hrsStampNote');
   if (note) {
     if (auto !== '' && Math.abs(hrs - parseFloat(auto)) >= 0.05) {
@@ -3331,7 +3548,18 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
                  // Cycle Drop Min: the cycle that was REJECTED for exceeding CYCLE_BREAK_MIN,
                  // so a blank Cycle Min is explainable from the row. NEW = the v1.23 math would
                  // have scored this one.
-                 'Cycle Drop Min','Cycle Drop New'];
+                 'Cycle Drop Min','Cycle Drop New',
+                 // --- v1.26 append ---
+                 // Cycle Note explains EVERY accept, so no blank Cycle Min is ever a mystery:
+                 //   ACCEPT      cycle closed at the next accept (the normal case)
+                 //   SHIFT-STOP  cycle closed at the end of its shift block (last run of a
+                 //               block/day -- previously scored nothing at all)
+                 //   DD-OCCUPIED DD row, rated over its own run+return
+                 //   LAST-OPEN   last run with the shift still running: nothing to close against
+                 //   GAP>90      dropped by CYCLE_BREAK_MIN (see Cycle Drop Min)
+                 //   ZERO-SPAN   degenerate span; should be unreachable since v1.26 sorts runs
+                 //   NO-ACCEPT-TIME  hand-logged row with no accept stamp
+                 'Cycle Note'];
   var rows = src.map(function(e) {
     var hasM = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
     var actTotal = hasM ? ((parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0)).toFixed(2) : '';
@@ -3376,7 +3604,8 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
       e.cycleOverlapMin == null ? '' : Math.round(e.cycleOverlapMin),
       // --- v1.25 appends ---
       e.cycleDropMin == null ? '' : Math.round(e.cycleDropMin),
-      e.cycleDropNew ? 'NEW' : ''
+      e.cycleDropNew ? 'NEW' : '',
+      e.cycleNote || ''
     ]);
   });
 
