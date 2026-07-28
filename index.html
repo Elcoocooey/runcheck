@@ -1,6 +1,50 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.27
+  RunCheck v1.29
+  v1.29: CLOSING BASIS ON DROPPED CYCLES. Cycle Note gains ONE new enum member:
+           GAP>90              dropped, closed at the next accept -- a real mid-day gap
+           GAP>90-SHIFT-STOP   dropped, closed at shift stop -- a last-of-day cycle that was
+                               recovered by v1.26 and then failed the backstop
+         Deliberately a distinct member of a known set, NOT a suffix on GAP>90, so a downstream
+         exact-match on GAP>90 keeps working and does not have to learn about optional tails.
+         Why it exists: it does not gate the return/idle refit -- dropped rows have no cycle, so
+         they are out of those models either way and not one row that enters the fit is
+         relabelled. It earns its keep on the CYCLE_BREAK_MIN question. The ratio of shift-stop
+         drops to mid-day drops IS the argument for or against moving 90: mostly shift-stop
+         means raising the backstop recovers end-of-shift wind-down (see the v1.26 caveat --
+         those cycles absorb it), mostly mid-day means it recovers signal. As of 07/27 it is
+         1 of 8 shift-stop, 7 mid-day -- clearly the latter, but that is one week, and the point
+         is to read it off a column rather than re-derive it by inspecting days.
+         Safe to ship mid-measurement for the same reason Cycle Note itself was: a label on rows
+         that are ALREADY excluded, incapable of moving a cycle value, a rate or a verdict.
+         PARSER NOTE: the numeric part of both values is CYCLE_BREAK_MIN as it stood at export
+         time -- match on the 'GAP>' prefix, not the literal 90. This is deliberate: an archive
+         that spans a change to the backstop then self-documents which threshold judged each row.
+         Full Cycle Note enum is now: ACCEPT / SHIFT-STOP / DD-OCCUPIED / LAST-OPEN / GAP>90 /
+         GAP>90-SHIFT-STOP / ZERO-SPAN / NO-ACCEPT-TIME.
+         No gate, threshold or constant moved. CYCLE_BREAK_MIN still 90. No new CSV columns.
+         STILL HELD, not built: lag 4 -> 6, and the high-item cap.
+  v1.28: DOCUMENTATION CORRECTION. NO BEHAVIOR CHANGE -- not one line of logic differs from
+         v1.27. Reloading is optional; nothing computes differently.
+         The v1.26 comments claimed the 07/18 11:43 AM row was a ZERO-SPAN caused by
+         out-of-order pairing. It was not. A 14-day diff returned 0 rows attributable to the
+         sort, and that row exports as SHIFT-STOP with a cycle of 68 (lag 6 + run 30 + return 6
+         + idle 26). The actual mechanism, which neither side listed at the time:
+           A DD/UE accept does not close a Spark cycle's idle window. DD rows never enter the
+           `runs` array (see the `platform === 'DD/UE'` branch), so they cannot be the `nxt`
+           that terminates a cycle -- while DD WORK minutes ARE still subtracted from the idle
+           window by ddWorkMinIn. DD is netted out of idle but does not end it.
+         So 07/18 11:43 was the last CYCLE-ELIGIBLE accept of a single-block day, followed by a
+         12:39 PM DD filler. Under a "last accept including DD" reading it looked like an
+         anomaly with complete stamps and no cycle; under the correct one it is an ordinary
+         last-of-day row. There was never a second mechanism and there is nothing to chase.
+         CARRY FORWARD -- this is the part that bites later: "LAST OF DAY" MUST MEAN LAST
+         NON-DD ACCEPT. Any cohort split on last-accept-including-DD mislabels every day that
+         ends with a DD filler, which is most of them. In the CSV, cycle-eligible accepts are
+         the rows whose Cycle Note is NOT DD-OCCUPIED.
+         The sort stays. The hazard is real and prevention is cheap -- but it is preventive,
+         and it has not yet fixed an actual row. The comments no longer claim otherwise.
+         STILL HELD, not built: lag 4 -> 6, and the high-item cap.
   v1.27: PAST-DAY BREAK CORRECTION. v1.25 made today's breaks fixable; this makes ANY retained
          day fixable. A mis-stamped break is almost never noticed on the day -- it is noticed
          when the numbers are looked at, by which point the day has closed and the correction
@@ -34,10 +78,9 @@
              never crosses the end of the block it started in. A still-open block is unchanged.
          (2) RUNS ARE PAIRED IN TIME ORDER, not array order. The log is append-ordered, which is
              normally the same thing -- until a hand-logged row or an edited Time puts an entry
-             out of sequence, and a run gets paired against an EARLIER accept. That is the
-             07/18 11:43 AM row: complete stamps, negative gap, cycle computed as 0, skipped by
-             the `cyc <= 0` guard with no drop value recorded. It was the only unexplained blank
-             of the 24, and sorting fixes both it and any future mis-pairing.
+             out of sequence, and a run gets paired against an EARLIER accept.
+             [v1.28 CORRECTION: justified at the time by the 07/18 11:43 AM row. That was a
+             MISDIAGNOSIS -- see the v1.28 entry. The sort is preventive, not corrective.]
          (3) CYCLE NOTE explains EVERY accept. No blank Cycle Min is a mystery again:
              ACCEPT / SHIFT-STOP / DD-OCCUPIED / LAST-OPEN / GAP>90 / ZERO-SPAN / NO-ACCEPT-TIME.
          (4) RECONCILIATION TOLERANCE, measured not assumed. The float identity is EXACT --
@@ -2345,10 +2388,13 @@ function computeRealized(log, useShift) {
   // v1.26: PAIR IN TIME ORDER, not array order. Cycles are accept-to-accept, so the "next" run
   // has to be the next one CHRONOLOGICALLY. The log is append-ordered, which is normally the
   // same thing -- but a hand-logged row or an edited Time puts it out of sequence, and then a
-  // run gets paired against an EARLIER accept. That produced the 07/18 11:43 AM row: complete
-  // stamps, negative gap, cycle computed as 0, skipped by the `cyc <= 0` guard with no drop
-  // value recorded -- the one genuinely unexplained blank. Sorting fixes the row and, more to
-  // the point, stops any other out-of-order entry from silently mis-pairing a cycle.
+  // run pairs against an EARLIER accept, producing a negative gap and a garbage cycle.
+  // v1.28 CORRECTION: this sort was originally justified by the 07/18 11:43 AM row, which was
+  // diagnosed as exactly that failure. THAT DIAGNOSIS WAS WRONG. A 14-day diff came back
+  // 0 rows attributable to the sort. 07/18 11:43 was the last NON-DD accept of a single-block
+  // day, recovered by shift-stop closing (SHIFT-STOP, cycle 68) -- it was never degenerate.
+  // The sort is kept because the hazard is real and cheap to prevent, but it is PREVENTIVE:
+  // it has never yet fixed an actual row. Do not cite 07/18 as evidence for it.
   runs.sort(function(a, b) { return a.acceptedAtMs - b.acceptedAtMs; });
   var sumNet = 0, sumCycle = 0;
   // v1.25 COVERAGE DIAGNOSTIC. A cycle over CYCLE_BREAK_MIN is discarded as a missed break tap.
@@ -2431,7 +2477,15 @@ function computeRealized(log, useShift) {
                - breakMinIn(e.acceptedAtMs, nextAcc)
                - ddWorkMinIn(log, e.acceptedAtMs, nextAcc);
       e.cycleDropNew = (v123 > 0 && v123 <= CYCLE_BREAK_MIN);
-      e.cycleNote = 'GAP>' + CYCLE_BREAK_MIN;
+      // v1.29: stamp WHAT THE CYCLE WAS CLOSED AGAINST onto the drop, as a distinct enum
+      // member rather than a suffix -- a downstream exact-match on GAP>90 must keep working.
+      // A drop closed at the next accept is a genuine mid-day gap; one closed at shift stop is
+      // a recovered last-of-day cycle that then failed the backstop, and per the v1.26 caveat
+      // those absorb end-of-shift wind-down. The RATIO between them is the argument if
+      // CYCLE_BREAK_MIN is ever revisited: mostly shift-stop drops means raising it recovers
+      // wind-down noise; mostly mid-day drops means it recovers signal. Readable off a column
+      // now instead of re-derived by inspecting days.
+      e.cycleNote = 'GAP>' + CYCLE_BREAK_MIN + (cycleNote === 'SHIFT-STOP' ? '-SHIFT-STOP' : '');
       cyclesDropped++;
       if (e.cycleDropNew) cyclesDroppedNew++;
       continue;
@@ -3556,8 +3610,15 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
                  //               block/day -- previously scored nothing at all)
                  //   DD-OCCUPIED DD row, rated over its own run+return
                  //   LAST-OPEN   last run with the shift still running: nothing to close against
-                 //   GAP>90      dropped by CYCLE_BREAK_MIN (see Cycle Drop Min)
-                 //   ZERO-SPAN   degenerate span; should be unreachable since v1.26 sorts runs
+                 //   GAP>90            dropped by CYCLE_BREAK_MIN, closed at the next accept
+                 //                     -- a genuine mid-day gap (see Cycle Drop Min)
+                 //   GAP>90-SHIFT-STOP dropped by CYCLE_BREAK_MIN, closed at shift stop -- a
+                 //                     last-of-day cycle recovered then rejected
+                 //   NOTE for parsers: the numeric part of both is CYCLE_BREAK_MIN as it stood
+                 //   at export time. Match on the 'GAP>' prefix, not the literal 90, so an
+                 //   archive spanning a change to the backstop still parses.
+                 //   ZERO-SPAN   degenerate span (never yet observed in real data; the row once
+                 //               attributed to it was a misdiagnosis -- see the v1.28 header)
                  //   NO-ACCEPT-TIME  hand-logged row with no accept stamp
                  'Cycle Note'];
   var rows = src.map(function(e) {
