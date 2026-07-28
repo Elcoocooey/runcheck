@@ -1,6 +1,68 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.29
+  RunCheck v1.31
+  v1.31: REVERT OF THE v1.30 `>=`. One line back to `>`. Everything else in v1.30 stands.
+         v1.30 changed the DD return test from `backAt > deliveredAt` to `>=`, to record a
+         "measured zero" when Back was tapped at the drop. The premise was wrong on both halves:
+         (a) A real zero-length return was ALREADY exporting as 0. Two human taps are always at
+             least milliseconds apart, so `>` passes and Return Min rounds to 0 in the CSV.
+             Nothing was being thrown away.
+         (b) Exact millisecond equality has exactly one source: the missed-Delivered fallback
+             inside tapBack(), which fabricates deliveredAt and sets backAt on the next line.
+             Two consecutive Date.now() calls land in the same millisecond 100% of the time
+             (measured, 200k trials), so that path ALWAYS produces deliveredAt === backAt.
+         So `>=` never captured a measured zero. Its only effect was to write "0 minutes of
+         return" onto runs where Delivered was never tapped and nothing was measured -- encoding
+         a fabricated stamp as an observation, into the DD population whose return term is about
+         to be fitted. Strict `>` leaves those blank, which is the truth.
+         This is the same error the analysis chat rejected the SPARK `>=` for. That reasoning
+         applied to DD too and it caught a live defect; the Spark change was declined on
+         independent evidence (74 runs, the strict `>` has never fired) and is not being made.
+         NO NEW COLUMN NEEDED to spot the fabricated case: Back At present AND Return Min blank
+         means Delivered was never tapped and Run Min has absorbed the return leg. On Spark that
+         population is currently zero.
+         Everything else from v1.30 is unchanged and still correct: the reload-bug fix (the
+         migration is guarded and can no longer close a live in-flight DD), the derived chained
+         leg as DD-OCCUPIED-DERIVED, the ddWorkMin firewall, and close-reason disclosure.
+         STILL HELD, not built: lag 4 -> 6, the high-item cap, and the Spark `>=`/derivation
+         pair, which if ever done must be done TOGETHER and after the window closes.
+  v1.30: DD RETURN CAPTURE. Three asks were raised; answering them turned up a fourth thing
+         that was causing most of the damage.
+         (0) ROOT CAUSE -- THE MIGRATION WAS FIRING ON EVERY PAGE LOAD. The v1.23 DD-closure
+             migration was written as a one-time upgrade step and shipped as an UNGUARDED IIFE.
+             It re-ran on every load. Any DD run delivered-but-not-yet-backed at the moment of
+             a reload -- i.e. while the driver was still driving back, exactly when the return
+             leg is being measured -- was silently marked closed. It left the capture bar, the
+             Back tap became impossible, and Return Min exported blank forever with no close
+             reason. On a phone a backgrounded PWA reload is routine, so this fired constantly.
+             Those blanks were never "chained" or "forgot to tap". The app closed the run out
+             from under the driver. Now guarded by a persisted flag so it runs AT MOST ONCE,
+             and it will not touch a run delivered TODAY; anything it does close is labelled
+             AUTO-CLOSED-LEGACY. Verified by simulating a reload against a live in-flight DD.
+         (1) MEASURED ZERO IS DATA. The DD return test was `backAt > deliveredAt`; it is now
+             `>=`. Back tapped AT the drop means there was no return leg, and that observation
+             now writes Return Min = 0 instead of blank -- where it had been indistinguishable
+             from a missed tap.
+         (2) THE CHAINED CASE. A DD with no Back tap now derives its return from
+             Delivered -> next Started (any platform; DD-into-Spark is the common chain),
+             bounded by DD_DERIVED_RETURN_MAX_MIN (45). Labelled as a DISTINCT Cycle Note
+             member, DD-OCCUPIED-DERIVED, alongside DD-OCCUPIED -- same pattern as
+             GAP>90-SHIFT-STOP, so an exact match on DD-OCCUPIED keeps working.
+             A derived leg is DELIBERATELY EXCLUDED from ddWorkMin. That figure is subtracted
+             from surrounding SPARK idle windows and Spark cycles are in the models being
+             fitted now; ddWorkMinIn() reads backAt directly, so the inference cannot reach it.
+             The derived leg moves the DD row's own rate and nothing else.
+         (3) DISCLOSURE PARITY WITH SPARK. Every way a DD run can end now says which it was:
+             B / N (real tap), SHIFT-END, DISMISSED, AUTO-CLOSED-LEGACY, or a labelled derived
+             leg. A blank DD return is no longer ambiguous between chained and missed.
+         Full Cycle Note enum is now NINE members: ACCEPT / SHIFT-STOP / DD-OCCUPIED /
+         DD-OCCUPIED-DERIVED / LAST-OPEN / GAP>90 / GAP>90-SHIFT-STOP / ZERO-SPAN /
+         NO-ACCEPT-TIME.
+         NOT CHANGED, and flagged rather than assumed: the SPARK return test is still strict
+         `>`, so a Spark Back tapped at the drop still writes blank rather than 0. Same
+         principle, but Spark rows ARE in the refit and this is mid-measurement.
+         No gate, threshold or constant moved. CYCLE_BREAK_MIN still 90. No new CSV columns.
+         STILL HELD, not built: lag 4 -> 6, and the high-item cap.
   v1.29: CLOSING BASIS ON DROPPED CYCLES. Cycle Note gains ONE new enum member:
            GAP>90              dropped, closed at the next accept -- a real mid-day gap
            GAP>90-SHIFT-STOP   dropped, closed at shift stop -- a last-of-day cycle that was
@@ -1507,6 +1569,11 @@ var gasIsDefault = true;
 // === TUNABLE: DD/UE filler branch net/hr floor. Provisional 15 (was 20): DD fills idle only, so a quick (<=25min) $5-6 net run beats $0 idle. Monitor -- small risk of missing a Spark ping mid-run. ===
 var DDUE_FILLER_MIN_HR = 15;
 var DDUE_FILLER_MAX_MIN = 25;   // hard cap on est time -- do not relax
+// v1.30: outer bound on a DERIVED DD return leg (Delivered -> next Started). Capture hygiene,
+// NOT a model parameter: it only decides whether a blank return is inferred or left blank, and
+// it touches DD rows only, which are excluded from every model. Beyond this the driver plainly
+// did something else in between and the gap is not a return leg. Tune freely.
+var DD_DERIVED_RETURN_MAX_MIN = 45;
 var DDUE_FILLER_MIN_PPM = 1.0;  // inert backstop (was 2.0). PPM floor removed -- net/hr + time cap are the real gate.
 // === Long-run penalty: est over this many min -> divide pay by penalty min for displayed net/hr ===
 var LONGRUN_THRESHOLD_MIN = 70;
@@ -1578,15 +1645,30 @@ try { hist = JSON.parse(localStorage.getItem('rch') || '[]'); } catch(e) { hist 
 try { fillups = JSON.parse(localStorage.getItem('rch_fillups') || '[]'); } catch(e) { fillups = []; }
 try { offerLog = JSON.parse(localStorage.getItem('rch_log') || '[]'); } catch(e) { offerLog = []; }
 try { prevLog = JSON.parse(localStorage.getItem('rch_log_prev') || '[]'); } catch(e) { prevLog = []; }
-// v1.23 MIGRATION: DD/UE now closes on a Back tap (return capture), where before it closed on
-// Delivered. Any DD run already delivered-but-un-backed in the PERSISTED log was complete under
-// the old model -- mark it closed so the upgrade doesn't resurrect it into the capture bar. Runs
-// created after load are handled live. Stamps are preserved; only the closed flag is set.
+// v1.23 MIGRATION -- REWRITTEN IN v1.30. THIS WAS THE BUG BEHIND THE MISSING DD RETURNS.
+// It was written as a one-time upgrade step but shipped as an UNGUARDED IIFE, so it re-ran on
+// EVERY page load. Any DD run that was delivered but not yet backed at the moment of a reload
+// -- i.e. the driver was still driving back, which is exactly when the return leg is being
+// measured -- was silently marked closed. It vanished from the capture bar, the Back tap became
+// impossible, and Return Min exported blank forever with no close reason to explain it.
+// That is not "chained" and not "forgot to tap": the app closed the run out from under the
+// driver. On a phone, a backgrounded PWA reload is routine, so this fired constantly.
+// Now: runs AT MOST ONCE, recorded by a persisted flag, and never touches a run delivered
+// TODAY, so a live in-flight return can no longer be destroyed by a reload. Anything it does
+// close is labelled, so it can never again be mistaken for a driver-side miss.
 (function migrateDDClosure() {
+  var done = '';
+  try { done = localStorage.getItem('rch_mig_ddclose') || ''; } catch(x) {}
+  if (done === '1') return;
+  var todayTs = new Date(); todayTs.setHours(0, 0, 0, 0);
   for (var i = 0; i < offerLog.length; i++) {
     var e = offerLog[i];
-    if (e && e.platform === 'DD/UE' && e.deliveredAt && !e.backAt && !e.capDismissed) e.capDismissed = true;
+    if (!e || e.platform !== 'DD/UE' || !e.deliveredAt || e.backAt || e.capDismissed) continue;
+    if (e.deliveredAt >= todayTs.getTime()) continue;   // today's run stays in flight
+    e.capDismissed = true;
+    e.closeReason = 'AUTO-CLOSED-LEGACY';
   }
+  try { localStorage.setItem('rch_mig_ddclose', '1'); } catch(x) {}
 })();
 try { prevDate = localStorage.getItem('rch_log_prev_date') || ''; } catch(e) { prevDate = ''; }
 
@@ -2354,11 +2436,23 @@ function updateLogBadge() {
 function computeRealized(log, useShift) {
   var runs = [], i, e;
   var ddWorkMin = 0;
+  // v1.30: every accepted run's Started stamp in time order, so a DD that was CHAINED straight
+  // into the next pickup (no Back tap) can have its return leg derived from Delivered -> next
+  // Started. Any platform can be the next start -- chaining DD into Spark is the common case.
+  var allStarts = [];
+  for (i = 0; i < log.length; i++) {
+    if (log[i] && log[i].accepted && log[i].startedAt) allStarts.push(log[i].startedAt);
+  }
+  allStarts.sort(function(a, b) { return a - b; });
+  function nextStartAfter(ms) {
+    for (var k = 0; k < allStarts.length; k++) if (allStarts[k] > ms) return allStarts[k];
+    return null;
+  }
   for (i = 0; i < log.length; i++) {
     e = log[i];
     e.cycleMin = null; e.realHr = null; e.runMin = null; e.returnMin = null; e.idleMin = null; e.lagMin = null;
     e.cycleBreakMin = null; e.cycleOverlapMin = null; e.cycleDropMin = null; e.cycleDropNew = false;
-    e.cycleNote = null;
+    e.cycleNote = null; e.returnDerived = false;
     if (!e.accepted || !e.acceptedAtMs) {
       // v1.26: a hand-logged row that was never accepted through the app has no accept stamp,
       // so it can never have a cycle. Say so rather than leaving a blank to be investigated.
@@ -2373,13 +2467,44 @@ function computeRealized(log, useShift) {
       if (e.deliveredAt && e.deliveredAt > runFrom) {
         e.runMin = minBetween(runFrom, e.deliveredAt);
         ddWorkMin += e.runMin;
+        var ddNote = 'DD-OCCUPIED';
         if (e.backAt && e.backAt > e.deliveredAt) {
+          // v1.31: REVERTED to strict `>`. v1.30 made this `>=` to capture a "measured zero",
+          // on the premise that Back-at-the-drop was being written blank. That premise was
+          // wrong, and the change was actively harmful:
+          //   - A REAL zero-length return already exports as 0. Two human taps are always at
+          //     least milliseconds apart, so `>` passes and Return Min rounds to 0 in the CSV.
+          //     The observation was never being lost.
+          //   - Exact millisecond equality has exactly ONE source: the missed-Delivered
+          //     fallback in tapBack(), which fabricates deliveredAt and then sets backAt on the
+          //     next line. Two consecutive Date.now() calls land in the same millisecond 100%
+          //     of the time, so that path ALWAYS produces deliveredAt === backAt.
+          // So `>=` did not capture a measured zero. It wrote "0 minutes of return" onto runs
+          // where Delivered was never tapped and NOTHING was measured -- encoding a fabricated
+          // stamp as an observation. Strict `>` leaves those blank, which is the truth.
+          // Detectable in the export without a new column: Back At present AND Return Min
+          // blank means Delivered was never tapped, and Run Min has absorbed the return leg.
           e.returnMin = minBetween(e.deliveredAt, e.backAt);
           ddWorkMin += e.returnMin;
+        } else if (!e.backAt) {
+          // v1.30: the CHAINED case. No Back tap because the driver fed straight into the next
+          // pickup. Derive the leg from Delivered -> next Started and LABEL it, so a derived
+          // leg is never mistaken for a measured one.
+          // DELIBERATELY NOT added to ddWorkMin: that figure is subtracted from surrounding
+          // SPARK idle windows, and Spark cycles are in the models being fitted right now.
+          // ddWorkMinIn() reads backAt directly, so a derived leg cannot reach it -- the
+          // inference stays confined to the DD row's own numbers. Revisit deliberately, with a
+          // fresh window, not as a side effect of a capture fix.
+          var ns = nextStartAfter(e.deliveredAt);
+          if (ns != null && minBetween(e.deliveredAt, ns) <= DD_DERIVED_RETURN_MAX_MIN) {
+            e.returnMin = minBetween(e.deliveredAt, ns);
+            e.returnDerived = true;
+            ddNote = 'DD-OCCUPIED-DERIVED';
+          }
         }
         // Give the DD row its own realized rate over its occupied time (no blank Real Net Hr).
         var ddCycle = e.runMin + (e.returnMin || 0);
-        if (ddCycle > 0) { e.cycleMin = ddCycle; e.realHr = (e.net || 0) / ddCycle * 60; e.cycleNote = 'DD-OCCUPIED'; }
+        if (ddCycle > 0) { e.cycleMin = ddCycle; e.realHr = (e.net || 0) / ddCycle * 60; e.cycleNote = ddNote; }
       }
       continue;
     }
@@ -3608,7 +3733,13 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
                  //   ACCEPT      cycle closed at the next accept (the normal case)
                  //   SHIFT-STOP  cycle closed at the end of its shift block (last run of a
                  //               block/day -- previously scored nothing at all)
-                 //   DD-OCCUPIED DD row, rated over its own run+return
+                 //   DD-OCCUPIED DD row, rated over its own run+return -- return leg MEASURED
+                 //               (a real zero-length return exports as 0 via rounding; a BLANK
+                 //               Return Min with Back At present means Delivered was never
+                 //               tapped, so Run Min absorbed the return leg)
+                 //   DD-OCCUPIED-DERIVED  same, but the return leg was INFERRED from
+                 //               Delivered -> next Started because the run was chained with no
+                 //               Back tap. Not a measurement. Excluded from ddWorkMin.
                  //   LAST-OPEN   last run with the shift still running: nothing to close against
                  //   GAP>90            dropped by CYCLE_BREAK_MIN, closed at the next accept
                  //                     -- a genuine mid-day gap (see Cycle Drop Min)
