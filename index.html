@@ -1,6 +1,78 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.31
+  RunCheck v1.34
+  v1.34: FILLER CAP MOVED TO THE HONEST UNIT. Four executable lines differ from v1.33.
+         DDUE_FILLER_MAX_MIN 25 (raw est) -> 31.5 (committed), and both DD verdict paths plus
+         the decline-reason line now test and quote committed time.
+         BEHAVIOR-IDENTICAL, proven two ways: by construction (DD committed == est + 6.5 exactly,
+         since getTimeBuffer returns 0 for DD/UE and DD is not in READY_PLATFORMS) and by a
+         full sweep of the DD offer space (zero offers change class).
+         NO GATE RESHAPING. DDUE_FILLER_MIN_HR stays flat at 10.2. A constant $/hr on
+         return-inclusive time already charges proportionally to exposure; a gate that also
+         scaled with est would charge long fillers twice. The data does not ask for it either:
+         corr(est, realized rate) = 0.110 across 42 DD accepts -- estimated length does not
+         predict a worse rate.
+         THE LEVEL IS OPEN, deliberately. DD occupancy averages 24.0 min against a 16.9 mean
+         est, 7 of 42 runs exceed 31.5, max 47. The old cap never bounded real exposure. That
+         is an argument for making the unit honest now and revisiting the level with eyes open,
+         NOT for tightening it blind. Do not move 31.5 without the analysis chat.
+         MARGIN CAVEAT, recorded so it is not lost: DD's realized $13.71/hr is NOT measured
+         against $0 idle. Spark offers arrive at 3.29/hr with a 24.4% accept rate -- 0.80
+         acceptable offers per worked hour at $15.47 net each -- so if occupancy forgoes those
+         proportionally the opportunity cost of an occupied minute is around $12/hr and DD
+         clears it by roughly $1.30, not by $13.71. The true cost sits in that range and cannot
+         be pinned from 14 days. This does not move the bar -- 10.2 preserved an accept set that
+         was already earning -- but DD is a thin-margin filler, and the long-filler tail is
+         where the thinness bites. Relevant if 31.5 is ever raised.
+  v1.33: DD RETURN TERM + DD GATE, shipped as ONE change. Three logic hunks differ from v1.32.
+         DD_RETURN_MIN = 6.5 (flat, DD-only) now rides in DD committed time, and
+         DDUE_FILLER_MIN_HR drops 15 -> 10.2 to compensate. Same pairing rule as v1.32's
+         lag/gate: neither half ships alone, and a revert reverts both.
+         BASIS CHANGE, IMPORTANT FOR THE ARCHIVE: on DD rows, `Committed Min` and `Net Hr Rate`
+         are now computed over run + 6.5, not run alone. DD rows from a v1.33 export are NOT
+         comparable to DD rows from v1.32 or earlier on those two columns. Spark rows are
+         untouched. No cycle, no realized rate and no capture path is affected -- this changes
+         the at-the-line gate only.
+         The v1.32 option-A footnote on the DD decline-reason line was DROPPED from the queue,
+         not forgotten: it exists to warn that the DD figure is on an incomparable basis, and
+         after this build it no longer is. Shipping both would have put a false sentence in the
+         app. If this build is ever reverted, the footnote comes back with it.
+         NOT BUILT, still held: option B (deleting the dead DD showThresh branch and the DD arm
+         of acceptTargetFor) -- that branch is the hook this term will eventually need.
+         Also still held: the Spark `>=`/derivation pair.
+  v1.32: ANALYSIS-CHAT WORK ITEMS 1-3. Four logic hunks differ from v1.31.
+         (1) PREDICTED_LAG_MIN 4 -> 6 AND SPARK_ACCEPT_HR 16 -> 15.3, shipped as ONE change.
+             Lag rides in the committed denominator on every Spark offer, so +2 min lowers
+             displayed net/hr everywhere; 15.3 is the compensating half. Either one alone moves
+             the accept band. If one is ever reverted, revert both in the same build.
+             Consequence worth knowing: the Spark gate now sits $0.30 above the DD filler gate
+             (15), so acceptTargetFor() no longer quotes two meaningfully different numbers.
+             That is the analysis chat's call, flagged not tuned.
+         (2) HIGH_ITEM_CAP = 36. Over the cap, an otherwise-ACCEPT Spark offer becomes MARGINAL
+             with the item count named in the reason line. It can only SOFTEN an accept -- it
+             never rescues a DECLINE, never touches DD/UE, and never fires when the item field
+             is blank. Applied in analyze() AND saveEdit() so the two verdict paths agree.
+             BOUNDARY: strictly greater than 36 (36 is inside, 37 trips it), following the
+             getTimeBuffer bucket idiom. One character to flip if >= was meant.
+             Capture consequence, deliberate: `accepted` is derived from the verdict class, so a
+             capped offer is no longer auto-accepted and no longer auto-closes the previous run
+             as 'N'. Correct for MARGINAL -- it is the driver's call -- but it means a capped
+             run needs the accept toggle tapped.
+         (3) DROPPED CYCLES NOW DISCLOSE THEIR LEGS. The drop path returned before writing Idle
+             Min, Cycle Break Min and Cycle Overlap Min, so a dropped row carried Lag/Run/Return
+             and then three blanks, with Cycle Drop Min holding an undecomposable sum. The
+             measured occupied time on those rows could not be told apart from the idle window
+             that tripped the backstop. Now written from the same variables a scored row uses.
+             CYCLE MIN STAYS BLANK AND REAL NET HR STAYS NULL -- the backstop's verdict on every
+             row is byte-identical to v1.31. This is disclosure, not a threshold change.
+             Downstream: Idle Min is no longer blank-iff-dropped. Select on Cycle Note.
+         (4) Item 4 was a question, not a change: Close Reason duplicating Return Kind on every
+             populated row is CORRECT and by construction. tapBack() sets both to the same kind,
+             so on a real Back tap they agree by definition. Close Reason earns its column on the
+             rows where there was no Back tap -- SHIFT-END, DISMISSED, AUTO-CLOSED-LEGACY -- and
+             those rows have a blank Return Kind. Nothing to fix. See the note in tapBack().
+         NOT BUILT, still held: the Spark `>=`/derivation pair (do together, after the window
+         closes). CSV columns unchanged; enum unchanged.
   v1.31: REVERT OF THE v1.30 `>=`. One line back to `>`. Everything else in v1.30 stands.
          v1.30 changed the DD return test from `backAt > deliveredAt` to `>=`, to record a
          "measured zero" when Back was tapped at the drop. The premise was wrong on both halves:
@@ -1567,8 +1639,34 @@ var gas = GAS_SHIPPED_DEFAULT;
 // is the shipped constant, not a measurement. Drives the warnings.
 var gasIsDefault = true;
 // === TUNABLE: DD/UE filler branch net/hr floor. Provisional 15 (was 20): DD fills idle only, so a quick (<=25min) $5-6 net run beats $0 idle. Monitor -- small risk of missing a Spark ping mid-run. ===
-var DDUE_FILLER_MIN_HR = 15;
-var DDUE_FILLER_MAX_MIN = 25;   // hard cap on est time -- do not relax
+var DDUE_FILLER_MIN_HR = 10.2;
+// v1.33: 15 -> 10.2. THIS CONSTANT AND DD_RETURN_MIN MOVE TOGETHER AND ONLY TOGETHER.
+// Same pairing discipline as PREDICTED_LAG_MIN / SPARK_ACCEPT_HR in v1.32, for the same reason:
+// DD_RETURN_MIN adds 6.5 min to every DD committed denominator, which lowers displayed DD net/hr
+// on every DD offer. Landing the term without dropping the bar would be a pure tightening that
+// declines fillers the driver should take. If either is reverted, revert both in one build.
+// WHY THIS WAS NEEDED (analysis chat, 14 days, measured -- no model, no stand-in):
+//   Spark  n=74  3,653 occupied min  $1,144.79  ->  $18.80/hr
+//   DD/UE  n=42  1,009 occupied min  $  230.50  ->  $13.71/hr
+// A realized gap of $5.09 on the same occupied-minute basis. The illusion that made the two
+// gates look comparable: DD rated on RUN-ONLY minutes -- the basis its gate actually used --
+// comes out at $18.56/hr, within $0.24 of Spark. The old $15 DD gate was never near the $15.3
+// Spark gate in any real sense; it was measured on a denominator that stopped at the drop.
+// 28 of 42 DD runs realize under 15.3 on a comparable basis.
+// v1.34: 25 on RAW EST -> 31.5 on COMMITTED. BEHAVIOR-IDENTICAL, by construction and by sweep.
+// Because DD_RETURN_MIN is flat and DD carries no overrun (getTimeBuffer returns 0 for DD/UE) and
+// no scheduled wait (DD is not in READY_PLATFORMS), DD committed time is exactly est + 6.5. So
+// `committed <= 31.5` and `est <= 25` partition the DD offer space identically -- zero offers
+// change class. Third application of the same discipline as lag/gate and term/bar: make the unit
+// honest, move the bound to preserve behavior, then decide the LEVEL separately with eyes open.
+// THE LEVEL IS NOW AN OPEN QUESTION, and the measured picture argues for revisiting it rather
+// than trusting it: DD occupancy averages 24.0 min against a 16.9 mean est, 7 of 42 runs exceed
+// 31.5, and the max is 47. The 25-min cap has never bounded real exposure -- it was measured on
+// a denominator that stopped at the drop, the same artifact v1.33 removed from the gate. This
+// change does not tighten or relax anything; it just makes the number mean what it says.
+// IF DD EVER GAINS A WAIT OR AN OVERRUN, the equivalence above breaks and the cap starts
+// including that time. That is arguably correct, but it would no longer be behavior-identical.
+var DDUE_FILLER_MAX_MIN = 31.5;   // hard cap on COMMITTED time (run + return) -- do not relax
 // v1.30: outer bound on a DERIVED DD return leg (Delivered -> next Started). Capture hygiene,
 // NOT a model parameter: it only decides whether a blank return is inferred or left blank, and
 // it touches DD rows only, which are excluded from every model. Beyond this the driver plainly
@@ -1584,16 +1682,46 @@ var LONGRUN_PENALTY_MIN = 120;
 // DD returns are now MEASURED via capture (Change 4), not predicted into the DD accept gate. ===
 var RETURN_PER_MILE  = 1.13;
 var RETURN_FIXED_MIN = 4.9;
+// === v1.33 DD RETURN TERM. FLAT, DD-ONLY, 6.5 min. Paired with DDUE_FILLER_MIN_HR 15 -> 10.2.
+// FLAT ON PURPOSE. Measured DD return slope against miles is -0.131 +/- 0.499, r = -0.042 --
+// indistinguishable from flat, and faintly negative. Do NOT reach for the Spark term here: the
+// Spark model lands at 8.74 min on DD's 3.40 mean miles and the project has already established
+// it over-charges DD. Do NOT back-solve a per-mile shape from the mean either -- a fraction-of-est
+// form matches at the mean and diverges at both tails, which is not a shape this data supports.
+// 6.5 sits between the pooled (6.44) and clean (7.88) measured means, nearer pooled.
+// Applies to the DD ACCEPT GATE only. It does NOT touch DD capture: a DD row's realized return
+// leg is still measured or derived per the v1.30/v1.31 rules, and ddWorkMin is unchanged, so no
+// Spark cycle can move. ===
+var DD_RETURN_MIN = 6.5;
 // Predicted lag (accept -> start) ran 2-18 min, mean ~4. Weakest input in the model, but small
 // and roughly constant relative to the run, so a flat constant is fine for v1.23. Do NOT try to
 // predict it from miles/items yet -- revisit only if post-ship data shows it varies systematically.
-var PREDICTED_LAG_MIN = 4;
+// v1.32: 4 -> 6, measured. THIS CONSTANT AND SPARK_ACCEPT_HR MOVE TOGETHER AND ONLY TOGETHER.
+// Raising lag adds 2 min to every Spark committed denominator, which lowers displayed net/hr on
+// every Spark offer. Shipping it alone would silently tighten the accept gate by the same amount
+// it lowers the rate, so 16 -> 15.3 is the compensating half, not a separate loosening. If either
+// is ever reverted, revert both in the same build or the band moves under the driver's feet.
+var PREDICTED_LAG_MIN = 6;
 // === v1.23 Spark verdict bands, recalibrated onto the new (return-aware) committed basis.
 // 16-on-committed is NOT a loosening of the old 22-on-est: across 138 real offers the two agree
 // on 133; the 5 that differ are all mile-heavy runs the new gate correctly declines. Same bar,
 // made accurate. The build-up display makes this legible -- do NOT describe it in-app as
 // "lowering the threshold." ===
-var SPARK_ACCEPT_HR = 16;   // net >= this $/hr on committed min (incl. return+lag) -> ACCEPT
+// v1.32: 16 -> 15.3, the paired half of PREDICTED_LAG_MIN 4 -> 6. See that constant. Do not
+// move one without the other. NOTE the gate now sits $0.30 above DDUE_FILLER_MIN_HR (15): the
+// Spark and DD tiers are nearly touching, which is the analysis chat's call to make, not this
+// chat's, but it is worth knowing that acceptTargetFor() no longer quotes two meaningfully
+// different numbers.
+var SPARK_ACCEPT_HR = 15.3; // net >= this $/hr on committed min (incl. return+lag) -> ACCEPT
+// v1.32 HIGH-ITEM CAP. An item count over this DOWNGRADES an otherwise-ACCEPT Spark offer to
+// MARGINAL with a stated reason. It NEVER upgrades a DECLINE and it never touches DD/UE (no item
+// count) or an offer with the item field left blank. Deliberately not a decline: a big shop can
+// still be the right run when the board is slow, so this hands the call to the driver instead of
+// making it for them.
+// BOUNDARY: fires on items STRICTLY GREATER than the cap -- 36 items is inside, 37 trips it.
+// This follows the getTimeBuffer bucket idiom (`items <= 25` is inside the bucket). If the
+// analysis chat meant >= 36, that is a one-character change on the comparison below.
+var HIGH_ITEM_CAP = 36;
 var SPARK_MARGINAL_HR = 13; // >= this (and < accept) -> MARGINAL band (was a flat $2 rule; now a committed-time gap: how far net/hr sits below the 16 gate, not raw dollars)
 // === v1.23 SLOW-BOARD FLAG (advisory only -- never auto-adjusts the gate). When recent idle is
 // high the alternative to a marginal run is $0/hr, so a marginal accept can be right. Surface the
@@ -2177,7 +2305,10 @@ function getTimeBuffer(estMin, platform, items, stops) {
 // gate should be cautious about -- acceptable. True return miles live in the mile-tracking app if
 // a future version wants to sharpen it.
 function predictedReturnMin(miles, isDDUE) {
-  if (isDDUE) return 0;
+  // v1.33: DD returns a FLAT constant, not zero. Both callers (analyze, saveEdit) already pass
+  // isDDUE and feed the result into committedMin AND getNetHrMinutes, so this one return
+  // statement puts DD on the same occupied-minute basis Spark has used since v1.23.
+  if (isDDUE) return DD_RETURN_MIN;
   if (!miles || miles <= 0) return 0;
   return RETURN_PER_MILE * miles + RETURN_FIXED_MIN;
 }
@@ -2611,6 +2742,22 @@ function computeRealized(log, useShift) {
       // wind-down noise; mostly mid-day drops means it recovers signal. Readable off a column
       // now instead of re-derived by inspecting days.
       e.cycleNote = 'GAP>' + CYCLE_BREAK_MIN + (cycleNote === 'SHIFT-STOP' ? '-SHIFT-STOP' : '');
+      // v1.32 DISCLOSURE ON DROPS. Until now the drop path `continue`d before writing Idle Min,
+      // Cycle Break Min and Cycle Overlap Min, so a dropped row exported Lag/Run/Return and then
+      // three blanks -- and the OCCUPIED time on the row (measured, real, already spent) could
+      // not be separated from the idle window that actually tripped the backstop. Cycle Drop Min
+      // held the sum and nothing decomposed it. That is the same failure the whole v1.24 identity
+      // work exists to prevent: a value that cannot be reconciled from the CSV alone.
+      // These are the SAME quantities a scored row publishes, computed identically, written from
+      // the same variables a few lines below. Cycle Min stays blank and Real Net Hr stays null --
+      // the backstop's verdict on this row is untouched, and no rate is created. The reconciliation
+      // identity now reads on a dropped row as:
+      //     Lag + Run + Return + Idle == Cycle Drop Min + Cycle Break Min + Cycle Overlap Min
+      // DOWNSTREAM: Idle Min is no longer blank-iff-dropped. Any reader that inferred "dropped"
+      // from a blank Idle Min must switch to Cycle Note, which has always been the label of record.
+      e.cycleBreakMin = occBreak;
+      e.cycleOverlapMin = overlap;
+      if (occFromBack) e.idleMin = idleOn;   // same gate as a scored row: no Back tap, no idle
       cyclesDropped++;
       if (e.cycleDropNew) cyclesDroppedNew++;
       continue;
@@ -2619,6 +2766,11 @@ function computeRealized(log, useShift) {
       // Should now be unreachable for chronologically-ordered stamps. Labelled rather than
       // dropped in silence, because "no cycle and no reason" is what cost a day of diagnosis.
       e.cycleNote = 'ZERO-SPAN';
+      // v1.32: same disclosure as the GAP> drop above. Never yet observed in real data, but if it
+      // ever fires it must not fire silently.
+      e.cycleBreakMin = occBreak;
+      e.cycleOverlapMin = overlap;
+      if (occFromBack) e.idleMin = idleOn;
       cyclesDropped++;
       continue;
     }
@@ -3134,7 +3286,13 @@ function tapBack(i, kind) {
   if (!e.deliveredAt) e.deliveredAt = Date.now();   // missed Delivered tap: at least capture the pair
   e.backAt = Date.now();
   e.returnKind = kind;
-  e.closeReason = kind;   // v1.24: a real Back tap, as opposed to a dismiss or a shift-end
+  // v1.24: a real Back tap, as opposed to a dismiss or a shift-end.
+  // v1.32, asked and answered: yes, Close Reason DUPLICATING Return Kind here is intended. On a
+  // real Back tap they are the same fact and agree by construction. The column earns its keep on
+  // the rows where no Back tap happened -- SHIFT-END / DISMISSED / AUTO-CLOSED-LEGACY -- which is
+  // exactly where Return Kind is blank. "Close Reason == Return Kind on all populated rows" is
+  // the signature of a week with no lost runs, not a bug.
+  e.closeReason = kind;
   saveOfferLog();
   renderAll();
 }
@@ -3962,7 +4120,8 @@ function saveEdit() {
   var vWord, showThresh = false;
   if (isDDUE) {
     // DD/UE filler branch
-    if (estMin <= DDUE_FILLER_MAX_MIN && netHr >= DDUE_FILLER_MIN_HR && ppm >= DDUE_FILLER_MIN_PPM) {
+    // v1.34: cap tests COMMITTED time, not raw est. Same partition, honest unit.
+    if (committedMin <= DDUE_FILLER_MAX_MIN && netHr >= DDUE_FILLER_MIN_HR && ppm >= DDUE_FILLER_MIN_PPM) {
       vWord = 'FILLER';
     } else {
       vWord = 'DECLINE';
@@ -3972,6 +4131,12 @@ function saveEdit() {
   else if (netHr >= SPARK_ACCEPT_HR)        { vWord = 'ACCEPT'; }
   else if (netHr >= SPARK_MARGINAL_HR)      { vWord = 'MARGINAL'; showThresh = true; }
   else                                      { vWord = 'DECLINE'; showThresh = true; }
+
+  // v1.32: the high-item cap has to live here too, or editing any field on a capped row silently
+  // promotes it back to ACCEPT and the two verdict paths disagree about the same offer.
+  if (!isDDUE && !isNaN(itemsForBuffer) && itemsForBuffer > HIGH_ITEM_CAP && vWord === 'ACCEPT') {
+    vWord = 'MARGINAL'; showThresh = true;
+  }
 
   // Update entry
   e.pay        = newPay;
@@ -4107,7 +4272,7 @@ function analyze() {
 
   // === DD/UE FILLER BRANCH -- separate logic, DD competes against $0/hr not a better offer ===
   if (isDDUE) {
-    var fillerTimeOK = estMin <= DDUE_FILLER_MAX_MIN;
+    var fillerTimeOK = committedMin <= DDUE_FILLER_MAX_MIN;   // v1.34: committed, not raw est
     var fillerHrOK   = netHrRate >= DDUE_FILLER_MIN_HR;
     var fillerPpmOK  = ppm >= DDUE_FILLER_MIN_PPM;
     if (fillerTimeOK && fillerHrOK && fillerPpmOK) {
@@ -4115,7 +4280,12 @@ function analyze() {
       vReason = 'Fills idle time -- $' + netHrRate.toFixed(0) + '/hr, ' + estMin + 'min, $' + ppm.toFixed(2) + '/mi. Never blocks a Spark run.';
     } else if (!fillerTimeOK) {
       vClass = 'decline'; vWord = 'DECLINE';
-      vReason = 'Est ' + estMin + ' min exceeds ' + DDUE_FILLER_MAX_MIN + ' min filler cap -- delays Spark start too long.';
+      // v1.34: the line now quotes what the run actually occupies, so the number the driver
+      // reads is the number the cap tests. Naming the split is the point -- "est 25" never was
+      // the exposure, and the reason line saying so was half the illusion.
+      vReason = 'Occupies ' + committedMin.toFixed(1) + ' min (' + estMin + ' run + '
+              + DD_RETURN_MIN + ' return) -- over the ' + DDUE_FILLER_MAX_MIN
+              + ' min filler cap. Delays Spark start too long.';
     } else if (!fillerPpmOK) {
       vClass = 'decline'; vWord = 'DECLINE';
       vReason = '$' + ppm.toFixed(2) + '/mi below $' + DDUE_FILLER_MIN_PPM.toFixed(2) + ' filler floor.';
@@ -4144,6 +4314,22 @@ function analyze() {
   } else {
     vClass = 'decline'; vWord = 'DECLINE'; showThresh = true;
     vReason = '$' + netHrRate.toFixed(0) + '/hr below $' + SPARK_MARGINAL_HR + '/hr floor  |  nets $' + net.toFixed(2) + ' after gas.';
+  }
+
+  // === v1.32 HIGH-ITEM CAP ==================================================
+  // Applied AFTER the band chain so it can only ever soften an ACCEPT, never rescue a DECLINE.
+  // The reason line is replaced outright rather than appended: at the line the driver reads one
+  // sentence, and "why is this not an accept" has to be the sentence they read.
+  // CAPTURE CONSEQUENCE, deliberate: `accepted` below is derived from vClass, so a capped offer
+  // is no longer auto-marked accepted and no longer auto-closes the previous run as 'N'. That is
+  // the correct behavior for MARGINAL -- it is the driver's call -- but it does mean a capped run
+  // needs the accept toggle tapped, exactly like any other marginal.
+  var highItems = !isDDUE && !isNaN(itemsForBuffer) && itemsForBuffer > HIGH_ITEM_CAP;
+  if (highItems && vWord === 'ACCEPT') {
+    vClass = 'marginal'; vWord = 'MARGINAL'; showThresh = true;
+    vReason = itemsForBuffer + ' items -- over the ' + HIGH_ITEM_CAP + '-item cap. $'
+            + netHrRate.toFixed(0) + '/hr clears the $' + SPARK_ACCEPT_HR
+            + '/hr line, but a shop this size overruns its est. Your call.';
   }
 
   document.getElementById('vBanner').className = 'verdict-banner ' + vClass;
