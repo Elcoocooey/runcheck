@@ -1,6 +1,771 @@
 <!DOCTYPE html>
 <!--
-  RunCheck v1.34
+  RunCheck v1.54
+  v1.54: A MANUAL GAS RATE NEVER EXPIRED. The analysis chat's stale-fillups hypothesis, chased
+         into the code, found a worse hole than the one they proposed.
+         THEIR HYPOTHESIS: the recovered rates step at none of the logged receipts (07/25, 07/27,
+         07/29 at 0.3417 / 0.3113 / 0.3519) and hold flat near 0.3135, so receipts may be going
+         into the spreadsheet but not into RunCheck -- in which case every archive rate is a
+         slider value, which would also explain the exact 0.300000 rows and why
+         GAS_SHIPPED_DEFAULT never appears.
+         I CANNOT CHECK `fillups.length` FROM HERE -- it lives in localStorage on the phone, and
+         no export has ever carried it. That is itself the defect, and it is fixed below. The
+         driver can read it off the fillup panel now; from v1.54 every export answers it.
+         WHAT THE CODE DOES SAY, and it supports them: `gasWarning()` returns 'bad' only when
+         `gasIsDefault`, and 'warn' only when `gasStaleDays()` is non-null -- and gasStaleDays()
+         reads liveFillup(), which is NULL WITH AN EMPTY FILLUP LIST. manualGas() clears
+         gasIsDefault. So AFTER ONE SLIDER TOUCH WITH NO FILLUPS LOGGED, gasWarning() RETURNS
+         NULL FOREVER. Verified by running it: set 0.313, warning null, stale days null, and no
+         passage of time changes either. A rate set in July drives every accept decision in
+         August, silently. They are right that GAS_STALE_DAYS has never had anything to guard --
+         it guards fillups, and a manual rate was outside it entirely.
+         FIX 1 -- A MANUAL RATE AGES LIKE A FILLUP. manualGas() stamps `manualSetAtMs`.
+         gasStaleDays() falls back to it when there is no fillup, so the same GAS_STALE_DAYS (10)
+         applies, and gasWarning() says which kind of rate has gone stale rather than pretending
+         nothing is wrong. A typed number is an assertion with a shelf life.
+         FIX 2 -- THE EXPORT DECLARES ITS OWN GAS STATE. New summary cells: `Fillups Stored`
+         (how many receipts the app actually holds), `Live Gas Origin` (FILLUP / MANUAL /
+         DEFAULT), `Live Gas Cpm`, `Gas Stale Days`. If the answer is 0 fillups, the next export
+         says so on its first line instead of being reconstructed 46 SE at a time.
+         ON THE 46-SE OFFSET: not resolved here, and the app cannot resolve it -- if no receipt
+         ever reached the app then no logged cost/mile was ever the charging rate, and the
+         recovered 0.3135 is a slider value that simply never matched the spreadsheet. That is
+         consistent with everything measured but is NOT established until fillups.length is read.
+         RECORDED: inverse-variance weighting gives 0.313475 +/- 0.000047 for 07/27-07/31, 46 SE
+         from the logged 0.311296, with per-day pooled figures ~18 SE apart. Rounding is
+         mean-zero, so this is a CENTER problem, not a noise problem -- the v1.53 sweep explains
+         the spread and does not touch the offset.
+  v1.53: NOTHING IS MISSING FROM gasCost. THE INVERSION IS EXACT IN-APP AND LOSSY FROM A CSV --
+  v1.53: NOTHING IS MISSING FROM gasCost. THE INVERSION IS EXACT IN-APP AND LOSSY FROM A CSV --
+         and v1.51/v1.52 called it "exact" without saying which.
+         THE ANALYSIS CHAT'S FINDING: the 07/27-07/31 cluster, which should share one rate,
+         spreads 0.31263-0.31502 (~0.0024), about ten times cent-rounding SE, and 07/27 sits
+         0.0021 off the fillup's logged 0.311296. Their conclusion -- that something beyond
+         (2*miles + travelMiles)*cpm is in gasCost -- was the right thing to suspect.
+         IT ISN'T. THE MODEL IS COMPLETE. Reproduced by sweeping 1,035 synthetic rows at a known
+         true rate of 0.311296 and inverting FROM THE EXPORTED CELLS: error range -0.001296 to
+         +0.001204, SPREAD 0.0025 -- matching their observed 0.0024 almost exactly.
+         THE CAUSE IS `Net After Gas` AT 2dp, AMPLIFIED BY A SMALL DENOMINATOR. The inversion
+         divides by (2*miles + travelMiles), so a rounding error of up to $0.005 in net becomes
+             |cpm error| <= 0.005 / (2*miles + travelMiles)
+         At 10 miles that is 0.00025 -- invisible. AT 1 MILE IT IS 0.0025, which is the whole
+         observed spread. Worst case in the sweep was exactly that: 1.0 miles, inverting to
+         0.310000 against a true 0.311296. A CLUSTER'S SPREAD IS THEREFORE DRIVEN BY ITS SHORTEST
+         RUNS, and 07/27 sitting 0.0021 low is consistent with a low-mileage row, not a missing
+         term.
+         WHAT v1.51 AND v1.52 GOT WRONG: both headers called the legacy inversion "Exact, not
+         estimated". That is true of the IN-APP path and false of the CSV path, and neither said
+         which. Measured here: in-app `effectiveGasCpm()` reads the FULL-PRECISION stored `net`
+         and recovers 0.311296 to 1.3e-15. The same row inverted from its own exported cells
+         gives 0.310000. Same row, same formula, two different answers -- because the export
+         rounds and the app does not.
+         THE PRACTICAL CONSEQUENCE, and it is good news: a DERIVED `Gas Cpm` cell exported by
+         v1.51+ IS EXACT, because the app computes it from stored full precision before writing
+         it at 6dp. The lossy path is only inverting by hand from an OLD CSV that has no Gas Cpm
+         column. SO: RE-EXPORT ANY DAY STILL INSIDE THE 14-DAY WINDOW RATHER THAN INVERTING THE
+         ARCHIVED FILE -- the app still holds those rows at full precision and will hand back the
+         exact rate. Days already aged out of HISTORY_DAYS cannot be recovered this way, and for
+         those the bound above applies.
+         `Gas Cpm Max Err` -- NEW COLUMN. 0.005 / (2*miles + travelMiles), the worst-case error
+         if that row's rate is re-derived from the ROUNDED export instead of read from Gas Cpm.
+         It is 0 on nothing -- it is always the bound for a hand inversion -- and it makes the
+         low-mileage rows that dominate a cluster's spread identifiable at a glance.
+         RECORDED, analysis chat: retroactive origin classification is NOT possible and DERIVED is
+         right for the whole legacy archive -- the slider's 0.001 grid is coarse enough that a
+         random rate reads as slider-reachable ~80% of the time, and 15 of 19 clusters do. Only
+         08/05 and 08/10 carry real evidence: exactly 0.300000, matching no logged fillup.
+  v1.52: THE RATE'S ORIGIN, not just its value. Answering where 0.300000 came from.
+  v1.52: THE RATE'S ORIGIN, not just its value. Answering where 0.300000 came from.
+         THE QUESTION (analysis chat): 08/05 and 08/10 invert to EXACTLY 0.300000, six-decimal
+         round, which no receipt division produces. Is there a path other than a fillup?
+         YES -- THE MANUAL SLIDER. `<input type="range" min="0.15" max="0.45" step="0.001"
+         oninput="manualGas(this.value)">`. A STEP OF 0.001 IS EXACTLY THE SIGNATURE: every value
+         it can emit is round to three decimals, and 0.300 is a stop on it. manualGas() sets
+         `gasSource = 'manual'` and clears gasIsDefault, so the app knew the difference all along
+         -- it just never wrote it onto the row. The analysis chat inferred a distinction the
+         data already contained but the export had discarded.
+         THERE IS A THIRD ORIGIN TOO: GAS_SHIPPED_DEFAULT (0.3175), used when no fillup has been
+         logged. Also round, also not a receipt division, and a completely different epistemic
+         status from either a measured fillup or a deliberate manual entry.
+         `Gas Cpm Source` NOW CARRIES THE ORIGIN. Values, and what each is worth:
+           FILLUP   derived from a logged receipt: ppg * gal / mi. A MEASUREMENT.
+           MANUAL   typed on the slider. An ASSERTION, and quantized to 0.001 by the control.
+           DEFAULT  GAS_SHIPPED_DEFAULT, no fillup logged. A PLACEHOLDER, not an observation.
+           DERIVED  inverted from an older row via (pay-net)/(2*miles+travelMiles). Exact as a
+                    VALUE, but the ORIGIN IS UNRECOVERABLE -- the inversion cannot tell a fillup
+                    from a slider entry. Every pre-v1.52 row is necessarily DERIVED.
+           (blank)  nothing chargeable; no rate.
+         v1.51 collapsed FILLUP, MANUAL and DEFAULT into one label, STORED. That was wrong in the
+         same way the old Return Kind was wrong: two different kinds of fact sharing a cell.
+         WHAT THIS MEANS FOR 08/05 AND 08/10: the app cannot retroactively say which path set
+         those rates -- the rows predate the field. But 0.300000 is reachable ONLY by slider or by
+         a receipt dividing exactly, and the slider's 0.001 step makes it the overwhelming
+         explanation. From v1.52 the answer is recorded rather than reasoned.
+         RECORDED, analysis chat's inversion results: within-day spread collapses from ~0.5 to
+         ~0.003 once travelMiles is included, residual now genuinely at cent-rounding scale.
+         17 of 116 accepted rows carry travel miles and account for the entire multiplier tail.
+         Recovered rates 0.3118 (07/27-07/31), 0.3458 (08/01-08/03), 0.3000 (08/05-08/06),
+         0.2714 (08/07-08/09), with mid-shift transitions on 08/04, 08/06 and 08/09. TWO
+         INDEPENDENT CONFIRMATIONS: 0.3118 matches the 07/27 fillup's logged cost/mile to four
+         decimals, and 0.3458 matches the 08/01 charge -- a FIFTH confirmation of saveFillup()
+         from an unrelated direction.
+  v1.51: THE PER-ROW GAS RATE. One column closes both open problems, as the analysis chat spotted.
+  v1.51: THE PER-ROW GAS RATE. One column closes both open problems, as the analysis chat spotted.
+         WHAT IT FIXES.
+           1. THE saveEdit RESCORE (v1.50's disclosed exception). Editing an old row re-derived
+              its net at TODAY's gas rate -- a $40/10mi row stored at 0.30 came back scored at
+              0.60 after an edit to PAY. saveEdit now re-derives at THE ROW'S OWN RATE, so an edit
+              corrects what was edited and nothing else.
+           2. THE ROUND-TRIP RECONSTRUCTION. The rate no longer has to be inferred from
+              Pay/Net/Miles at all -- it is exported.
+         THE CHARGING MODEL, confirmed in code against the analysis chat's measurement:
+         `gasCost = (miles * cpm * 2) + (travelMiles * cpm)`. The return leg is charged at listed
+         mileage and nothing is added -- which is their median multiplier of 2.001 across 62 rows.
+         AND THE .001 IS NOT NOISE: the multiplier exceeds 2 exactly on rows with TRAVEL MILES,
+         which are charged one-way on top. Travel Miles is already an exported column, so those
+         rows are identifiable and the multiplier is exactly 2 once they are set aside.
+         ALSO CORRECTED, their note: the within-day scatter is NOT cent-rounding (at 3 miles that
+         moves the implied rate by 0.0017, far too small). It is MID-SHIFT GAS-RATE CHANGES --
+         rows on the same date sitting on different rates because a fillup landed partway through
+         the day. `Gas Cpm` makes that visible per row instead of inferable from scatter. And they
+         are right that the v1.46 2dp leg change does nothing for this reconstruction: it uses
+         Pay, Net After Gas and Miles, and Net After Gas was already 2dp.
+         LEGACY ROWS ARE BACK-DERIVED, NOT GUESSED. A pre-v1.51 row has no stored rate, but the
+         model is exactly invertible from values already on the row:
+             cpm = (pay - net) / (2 * miles + travelMiles)
+         Every term is stored at full precision IN MEMORY, so the IN-APP inversion recovers the
+         rate the row was actually scored at -- including a mid-shift change, which is the case
+         that matters. NOTE (v1.53): this holds for the in-app path ONLY. Inverting by hand from
+         an exported CSV is lossy, because `Net After Gas` is written at 2dp; see the v1.53 block
+         for the bound. The `Gas Cpm` cell itself is exact because the app computes it before
+         rounding anything.
+         `Gas Cpm Source` says which: STORED (recorded at capture) or DERIVED (inverted from the
+         row). Blank where miles and travel are both 0 and the rate is unrecoverable.
+         THIS IS A BEHAVIOR CHANGE, unlike v1.50 -- editing an old row no longer rescores it. That
+         is the point. It does not touch any row that is never edited, so nothing already exported
+         moves, and the v1.50 forward-effective invariant still holds and is still tested.
+  v1.50: THE FUEL-ORDERING FIX IS FORWARD-EFFECTIVE ONLY. Answered, and now PINNED BY TEST.
+  v1.50: THE FUEL-ORDERING FIX IS FORWARD-EFFECTIVE ONLY. Answered, and now PINNED BY TEST.
+         THE QUESTION (analysis chat, asked three times, blocking install): does the v1.36
+         fuel-date fix re-derive `Net After Gas` on stored rows, or only affect future offers?
+         THE ANSWER: FORWARD-EFFECTIVE ONLY. INSTALLING MOVES NOTHING ALREADY RECORDED. Verified
+         by running it, not by reading it:
+           - `net` is computed ONCE in analyze() at the gas rate live at that moment, stored on
+             the row, and buildCsvFor emits `e.net.toFixed(2)` verbatim. There is no recompute.
+           - Stored a row at gas 0.30, doubled the live rate to 0.60, re-exported: 34.00 both
+             times.
+           - `Real Net Hr` is in the realized family and IS recomputed every export, but its
+             numerator is the STORED `e.net` (`realHr = (e.net||0) / cyc * 60`). The recompute
+             moves the denominator only. Also unmoved by a rate change.
+         So DD week A 13.22 and every other recorded figure survive the install unchanged, and the
+         pre-install v1.34 export is NOT the only copy of the current basis.
+         THE ONE EXCEPTION, and it is real: saveEdit() RE-DERIVES net AT THE CURRENT GAS RATE.
+         Demonstrated: a row stored at 0.30 with net 34.00, edited after the rate moved to 0.60,
+         comes back 28.00 -- from an edit to PAY, which has nothing to do with gas. So editing an
+         OLD row after install silently rescores that row at today's rate while its neighbours
+         keep the old one. It is one row at a time, not a sweep, but it is a mixed basis inside a
+         single day and nothing in the file marks it. `Edited At` (v1.42) is the flag that finds
+         these: ANY ROW WITH AN `Edited At` LATER THAN THE INSTALL CARRIES A NET SCORED AT A
+         POSSIBLY DIFFERENT GAS RATE. Not changed here -- storing a per-row gas rate is the
+         principled fix and it is a behavior change, which is not what belongs in front of an
+         install.
+         PINNED, not just answered. The invariant is now a test: a gas-rate change must not move a
+         stored net, an exported Net After Gas, or a Real Net Hr. If a future build ever makes
+         gas retroactive, the harness fails rather than the archive silently shifting.
+         RECORDED, analysis chat's archive check: the implied charged rate reconstructs to roughly
+         2x the gas log cpm with steps landing on the correct fillup dates -- consistent with
+         round-trip charging, and suggesting the fillups[0] ordering bug left NO FOOTPRINT across
+         07/27-08/09. Weak because cent-rounding on short runs blurs it; re-run against the first
+         v1.49+ export, where `Net After Gas` still carries 2dp but the leg columns no longer
+         round, and the reconstruction can be tightened.
+  v1.49: THE FALLBACK REFRAMING IS WITHDRAWN. It was a code path, not an explanation.
+  v1.49: THE FALLBACK REFRAMING IS WITHDRAWN. It was a code path, not an explanation.
+         WHAT v1.48 GOT WRONG. That header claimed the archive's 111 Accepted-Pay/Earned
+         agreements were ~111 rows FALLING BACK to offered pay, and that `Earned = Fare + Tip +
+         Cash` held trivially on rows carrying no data. Checked against the archive rather than
+         inferred from the reducer: ALL 116 ACCEPTED ROWS HAVE MONEY ENTERED. Zero rows are blank
+         across Actual Fare / Actual Tip / Cash Tip, zero have components summing to 0, and
+         `Rows Money Logged` will equal `Accepted` on all 15 days. THE FALLBACK PATH HAS NEVER
+         FIRED IN PRODUCTION DATA.
+         THE DISPROOF IS IN THE SPLITS. A fallback copies ONE number; it cannot manufacture a
+         fare/tip split. The agreement rows carry 75 distinct fare values and 48 distinct tip
+         values -- 10.50/6.44 summing to 16.94, 15.51/11.89 summing to 27.40. Those are itemized
+         entries. Both of the analysis chat's reconciliations were testing exactly what they
+         appeared to test, and the identity holds NON-trivially.
+         THE REAL CAUSE IS THE PLATFORM, not a code path. A Spark offer is a GUARANTEE WITH THE
+         CUSTOMER TIP ALREADY INSIDE IT, so actual equals offered unless the tip is revised after
+         delivery -- which is precisely the 5 divergent rows (two tips revised down, two up, one
+         $10 cash tip), net +$7.57. DD is the cleaner tell: fare carries the whole amount and
+         tip/cash are blank, which is DD's structure showing through, not missing data.
+         `Rows Money Logged` STAYS, but read it correctly: on existing data it discriminates
+         NOTHING, because it equals `Accepted` everywhere. Its value is FORWARD-LOOKING -- it
+         catches the day the driver stops itemizing. Do not read a high count as confirmation of
+         anything; it has only ever had one value.
+         THE v1.48 EQUAL-BY-FALLBACK FIXTURE HAS NO COUNTERPART IN THE ARCHIVE. It is retained
+         because the code path exists and should be pinned, but it is MARKED NON-REPRESENTATIVE
+         in the harness: nobody should calibrate an expectation about real data against it.
+         ENTERED-ZERO vs ABSENT IS LOAD-BEARING and is now pinned end to end. `Actual Tip = 0`
+         appears throughout the archive, so the distinction is live in production data, not
+         hypothetical. Verified through the real save path: a typed 0 stores as 0, reports
+         hasMoney() true, formats as "0.00", and exports as `0`; an untouched field stores as '',
+         reports absent, and exports blank. moneyParse('') is NaN -> '' while moneyParse('0') is
+         0, and every reader tests `!== '' && != null` rather than truthiness. No code change was
+         needed -- the behavior was already correct -- but nothing tested it, and on this data it
+         is the difference between a recorded no-tip and an unrecorded delivery.
+  v1.48: `Earned` IS A MIXED-BASIS COLUMN AND NEVER SAID SO. Found by chasing the analysis chat's
+  v1.48: `Earned` IS A MIXED-BASIS COLUMN AND NEVER SAID SO. Found by chasing the analysis chat's
+         fixture note; it is a bigger finding than the fixture.
+         THE FINDING. The reducer is `hasM ? money : (e.pay || 0)` -- actual fare+tip+cash WHERE
+         MONEY WAS ENTERED, OTHERWISE THE OFFERED PAY. So on any accepted row where the driver
+         never entered actuals, `Earned` is not a measurement at all: it is `Accepted Pay` copied
+         across. The two columns agree on those rows BY CONSTRUCTION, not by observation.
+         THIS EXPLAINS THE ARCHIVE -- WRONG, WITHDRAWN IN v1.49. The claim was that the 111
+         Accepted-Pay/Earned agreements were rows FALLING BACK, and that the Fare+Tip+Cash
+         identity held trivially on rows carrying no data. The archive says otherwise: every
+         accepted row has money entered, the fallback has never fired, and the agreements are
+         itemized splits that a single-number fallback cannot produce. The cause is Spark's
+         guarantee-with-tip-included model. See the v1.49 block.
+         WHY IT MATTERS: IF the fallback ever fires, a rate built on Earned is a rate built on
+         OFFERED pay wearing the name of realized pay, and the mixed basis is invisible in the
+         file -- both branches print as a plain dollar figure in the same cell. That risk is real
+         and is why the disclosure column stays; it has simply never materialized yet.
+         `Rows Money Logged` -- NEW summary cell. Accepted rows with at least one actual money
+         field entered, i.e. the rows where Earned is a MEASUREMENT. Compare against `Accepted`:
+         equal means Earned is fully realized; 0 means Earned is entirely offered pay wearing
+         another name; anything between is the mixed case and the difference is the fallback
+         count. This does not change a single number -- it discloses which basis produced them.
+         NOT CHANGING THE FALLBACK. It is the right behavior for the pace display, and removing it
+         would blank Earned on most days rather than improve it. The defect was never the
+         fallback; it was the silence. Whether a rate should use Earned at all when Rows Money
+         Logged is low is the analysis chat's call, and they now have the number to make it.
+         FIXTURE FIX, as suggested: the v1.47 money-cell fixture separated Accepted Pay from
+         Earned on every row, so it could not distinguish a correct read from a coincidentally
+         equal one. Three fixtures now -- divergent, equal-by-actuals (money entered that happens
+         to sum to pay), and equal-by-fallback (no money entered at all). The middle one is the
+         case the archive is full of and the one the old fixture could not represent.
+  v1.47: THE MONEY CELLS HAD NO TESTS. Acting on the coverage gap v1.46 exposed -- plus a
+  v1.47: THE MONEY CELLS HAD NO TESTS. Acting on the coverage gap v1.46 exposed -- plus a
+         correction to v1.46's own reading of the rounding.
+         CORRECTION TO v1.46, from the analysis chat, and it runs OPPOSITE to what that header
+         said. v1.46 claimed rounding meant "the +/-2 tolerance was being applied to values each
+         already displaced by up to 0.5", implying the +/-2 tier was compromised. IT WAS NOT.
+         Four independently rounded terms in Lag + Run + Return - Cycle give a residual with
+         sd 0.577, max 1.96, and 99.5% inside +/-1 -- PURE ROUNDING CAN NEVER FAIL A +/-2
+         TOLERANCE. What rounding actually compromised is the EXACT-MATCH tier, in the other
+         direction: rounding alone would produce an exact match 59.9% of the time, while the
+         archive shows 27%. Exact agreement is running WELL BELOW the rounding floor, which means
+         the identity carries real dispersion that rounding was MASKING by snapping near-misses
+         to zero. SO EXPECT THE EXACT-MATCH SHARE TO FALL SHARPLY ON THE FIRST 2dp EXPORT. That is
+         v1.46 working, not breaking. Do not read the drop as a regression.
+         THE COVERAGE GAP, audited rather than assumed. v1.46 found that the 2dp change broke no
+         assertion because nothing tested what the WRITER emits. Audit of every exported cell
+         against the harness: all 56 ROW columns are named somewhere, but ELEVEN SUMMARY CELLS
+         were never named at all -- `Hours Worked`, `Offers`, `Accepted Pay`, `Fare`, `Tip`,
+         `Cash Tips`, `Earned`, `Declined`, `Shift Start`, `Shift Stop`, `DD Work Min`.
+         THOSE ARE THE MONEY CELLS. Accepted Pay, Fare, Tip, Cash Tips and Earned are the inputs
+         to every rate figure the analysis chat publishes, and nothing in 715 assertions checked
+         one of them. They are now asserted against hand-computed totals on a fixture whose
+         answers are worked out in the test itself, so a silent change to any of them fails.
+         VERIFIED CORRECT, not just covered: Accepted Pay sums OFFERED pay over accepted rows;
+         Earned sums ACTUAL fare + tip + cash. They are different quantities and legitimately
+         differ (59.00 vs 63.00 on the fixture) -- worth stating because a reader could easily
+         assume one is a rounding of the other. DD Work Min measures started -> back on DD rows.
+         NO EXECUTABLE CHANGE TO THE APP. This build adds tests and corrects the record. No
+         column, no constant, no format, no gate. The version moves because the header changed
+         and the harness grew; the app's behavior is identical to v1.46.
+  v1.46: THE WRITER WAS DESTROYING THE EVIDENCE. Leg minutes export at 2dp, and the straddle scan
+  v1.46: THE WRITER WAS DESTROYING THE EVIDENCE. Leg minutes export at 2dp, and the straddle scan
+         runs in-app where the millisecond stamps still exist.
+         CORRECTION TO v1.45. That header said a straddled fabrication is "DETECTABLE IN THE
+         ARCHIVE" by a return leg above 0 but under 0.001 min. IT IS NOT, and never was: the CSV
+         writer emits `Math.round(e.returnMin)`, so 0.0000167 prints as 0 and the signature is
+         annihilated on the way out. The analysis chat confirmed it against the file -- zero
+         fractional values across all 517 leg observations in Lag/Run/Return/Cycle/Idle, smallest
+         nonzero return leg 1. I proposed a scan against a column that cannot carry the thing
+         being scanned for. The claim is wrong, not the mechanism.
+         AND THE EXPOSURE IS THE WHOLE FILE, not a tail. v1.34 is the only build that has ever
+         written data, so every row in the archive is a legacy row with no provenance marker, and
+         the tapBack() double-reading has been live for every run since 07/27. "Legacy" is 100% of
+         the history, not an old remnant.
+         FIX 1 -- LEG MINUTES NOW EXPORT AT 2dp. `Lag Min`, `Run Min`, `Return Min`, `Idle Min`,
+         `Cycle Min`, `Cycle Break Min`, `Cycle Overlap Min`, `Cycle Drop Min`. Same columns, same
+         positions, more precision -- the same kind of change as `Net Hr Rate` in v1.35, and the
+         same warning applies: A PARSER DOING STRING EQUALITY ON THESE CELLS NEEDS A NUMERIC
+         COMPARE, and every row exported before v1.46 is integer-rounded and cannot be recovered.
+         This is a BASIS BOUNDARY on eight columns. Rounding was hiding more than the straddle --
+         but the claim that followed here, that the +/-2 reconciliation tolerance was compromised,
+         is WRONG and is corrected in the v1.47 block: pure rounding cannot fail +/-2. The tier it
+         actually compromised is the exact-match one, in the opposite direction.
+         FIX 2 -- `Rows Straddle Candidate` on the summary line. Counts rows with a return leg
+         strictly between 0 and 0.001 min -- a gap no human tap can produce, so on a legacy row it
+         is a fabrication that escaped the equality test. Computed in-app on stored millisecond
+         stamps, which is the only place the evidence survives. Sits beside `Rows Minute Snapped`,
+         which exists for the same reason.
+         BOTH BOUNDS STATED. The count is a FLOOR on straddles, not a ceiling: a fabricated pair
+         that landed in the SAME millisecond is indistinguishable from a real zero-length return
+         and is already handled by the v1.41 heuristic. And the analysis chat's ceiling from the
+         file stands -- at most 4 candidate rows, the four with `Return Min` = 0.
+         RECORDED -- stacking: the corrected population is 6, mean stacked lag 17.60. The
+         occupancy-subtraction branch (`Stacked Started` 0) rests on a SINGLE observation, so the
+         rule is recorded but MUST NOT be applied to a published figure until a second instance
+         exists -- one row cannot separate "predecessor's occupancy" from "that particular
+         morning."
+  v1.45: tapBack() TOOK TWO CLOCK READINGS. Found by a 1-in-40 harness flake, not by reasoning.
+  v1.45: tapBack() TOOK TWO CLOCK READINGS. Found by a 1-in-40 harness flake, not by reasoning.
+         THE DEFECT. The missed-Delivered fallback called Date.now() for deliveredAt and then
+         Date.now() AGAIN on the next line for backAt. Nearly always the same millisecond -- but
+         not always. When the two straddle a boundary the fabricated pair differs by 1 ms, and
+         then:
+           - the pair is NOT equal, so deliveredProvenance() returns NA instead of FABRICATED
+           - the return leg computes as 0.0000167 min instead of staying blank
+           - a fabricated stamp is exported as a measurement
+         This is the same laundering v1.42 closed, arriving through the clock instead of the edit
+         path. The harness caught it at roughly 1 run in 40; on a phone the rate depends on where
+         the tap lands, and it has been live since the fallback was written.
+         FIX: ONE READING, used for both. `var nowMs = Date.now();` at the top of tapBack(). The
+         two stamps are now identical BY CONSTRUCTION rather than by luck, which is what the
+         provenance rules assumed all along.
+         SCOPE. Rows from v1.39 on also carry `deliveredInferred = true`, and that flag is checked
+         FIRST, so those rows were never at risk -- the marker did its job. The exposure is LEGACY
+         rows (pre-v1.39, no marker), where equality is the only evidence available.
+         DETECTABLE IN THE ARCHIVE -- WRONG, CORRECTED IN v1.46. The claim was that a straddled
+         fabrication leaves a signature no real tap can produce: a return leg GREATER THAN ZERO
+         but under 0.001 min. The signature is real IN MEMORY but the CSV writer rounded every leg
+         to whole minutes, so it printed as 0 and never reached the file. See the v1.46 block: the
+         legs now export at 2dp and the scan runs in-app.
+         NOT A NEW MEASUREMENT, no column, no constant, no gate. One line of executable change.
+  v1.44: STACKING DEPTH IS SPLIT BY PHASE, because the two kinds do not take the same correction.
+  v1.44: STACKING DEPTH IS SPLIT BY PHASE, because the two kinds do not take the same correction.
+         ANSWERING THE ANALYSIS CHAT'S QUESTION, from the code and verified by running it:
+         allInflightIdxs() is `accepted && !backAt && !capDismissed` -- `startedAt` IS NEVER
+         CONSULTED. So a run ACCEPTED BUT NOT YET STARTED counts as in flight. v1.43 therefore
+         marks 07/31 08:21 Shop+Pharmacy, the historical population is 6 not 5, and the
+         reconstruction was the undercount. The driver's description was right.
+         BUT THAT ROW TAKES A DIFFERENT CORRECTION, and this is why the answer is not just a
+         number. The analysis chat's decomposition -- mean stacked lag 12.00 against mean
+         REMAINING DD flight 11.00, near enough one-for-one -- holds for a run already underway:
+         the Spark lag contains the DD's TAIL. The 08:21 row is stacked on a DD accepted at 08:20
+         that did not start until 08:22, so its 40-minute lag contains the DD's WHOLE OCCUPANCY,
+         not a remainder. Subtracting a tail there under-corrects. One mark, two mechanisms.
+         `Stacked Started` -- NEW COLUMN. How many of the stacked runs had ALREADY STARTED when
+         this offer was accepted. With `Stacked Count` it separates the two populations without a
+         third state to reason about:
+           Count 1, Started 1  -> lag contains the other run's TAIL. Subtract the remainder.
+           Count 1, Started 0  -> lag contains the other run's WHOLE run. Subtract occupancy.
+           Started < Count     -> mixed; the row carries both mechanisms at once.
+         And it is the largest-lag row that sits in the second bucket, so the distinction is not
+         academic -- it is the row driving the 12.00 -> 17.60 difference in the mean.
+         RECORDED, analysis chat's coverage note: in the current archive `Stacked Count` is 1 on
+         every row and `Stacked On` is DD/UE on every row -- SPARK IS NEVER THE IN-FLIGHT RUN. So
+         the multi-stack path and the +-joined platform string are UNTESTED BY REAL DATA. They are
+         exercised in the harness only. Treat the DD-only pattern as a behavioral observation to
+         watch, not a rule -- it may only mean DD runs are short enough to accept over.
+         ALSO RECORDED: historical marks are reconstructable from stamps but are a LOWER BOUND in
+         a way forward marks are not -- reconstruction needs the predecessor accepted in-app with
+         complete stamps, and a run worked outside the app leaves no trace at all.
+  v1.43: STACKED ACCEPTS ARE MARKED AT CAPTURE. A Spark lag that contains a DoorDash run is not
+  v1.43: STACKED ACCEPTS ARE MARKED AT CAPTURE. A Spark lag that contains a DoorDash run is not
+         a Spark lag.
+         THE FINDING (analysis chat, confirmed against the file). A Spark accepted while a DD is
+         IN FLIGHT does not auto-close the DD -- the DD stays live until delivered and is closed
+         by an explicit FED NEXT PICKUP tap. All 6 stacked accepts in the window had a DD as the
+         in-flight run and all 6 of those DD runs closed TAP, never AUTO. Auto-close
+         classification is unaffected: re-testing with the rule that an accept must POST-DATE
+         delivery gives the same 33/14 split.
+         WHY IT MATTERS: the stacked accept's LAG ABSORBS THE REMAINING DD FLIGHT TIME -- mean
+         17.60 min against 4.34 unstacked, a 4x difference. That is DoorDash cost recorded on a
+         Spark row. Pooling the two lag populations mixes a wait with another platform's run.
+         MARKED AT CAPTURE, not inferred later. analyze() reads the app's own in-flight set --
+         allInflightIdxs(), the same function the capture bar uses, so there is exactly one
+         definition of "in flight" in the file -- and writes the platforms it found onto the new
+         row. Two new columns: `Stacked On` (the in-flight platforms, joined with +, blank when
+         nothing was live) and `Stacked Count`.
+         THIS IS NOT THE AUTO-CLOSE CASE and the two must not be confused:
+           prior run DELIVERED, not closed  -> auto-close fires, prior row gets Return Kind N and
+                                               Return Source AUTO-CLOSE. Nothing is stacked.
+           prior run STILL IN FLIGHT        -> no auto-close, and the NEW row is STACKED. The
+                                               prior run keeps running and will close on a tap.
+         So `Stacked On` describes the ROW IT IS ON (this accept happened during someone else's
+         run), while `Return Source` describes how the OTHER row ended. A row can be both.
+         AT THE LINE: the log row shows a STACKED badge naming what was live, so the mark is
+         visible while the day is still fixable rather than only in the export.
+         NOT A GATE CHANGE. Nothing here touches a verdict, a threshold, or a denominator. The
+         lag on a stacked row is still measured and exported exactly as before -- it is now
+         LABELLED, so the analysis chat can separate two populations that were pooling silently.
+  v1.42: EDIT PROVENANCE. Closes the laundering hole the analysis chat found in v1.41's
+  v1.42: EDIT PROVENANCE. Closes the laundering hole the analysis chat found in v1.41's
+         three-state rule -- and restores the edit signal that v1.40's Stops fix removed.
+         THE HOLE. v1.41 read "equal stamps, ON the minute" as flattened real taps and promoted
+         them to a measured 0. But an EDIT is what puts stamps on the minute. So a tapBack
+         fabrication that was later edited arrives in exactly that state and gets promoted. The
+         v1.39 permissive error was not removed, it MOVED to the edit path. Worse going forward
+         than backward: in the 08/10 file the Stops wipe accidentally fingerprinted the edited
+         population (6 of 44 DD accepts, 1 with equal stamps, already settled by the auto-close
+         test), but v1.40 fixed that wipe, so from v1.40 on an edited row was indistinguishable
+         and the laundering would have become undetectable rather than rare.
+         THE FIX -- ROWS NOW CARRY THEIR OWN EDIT HISTORY. saveEdit() stamps `editedAt` and
+         increments `editCount`. New rows carry `rowVer`, so a row created under v1.42+ can be
+         told apart from a legacy row that simply lacks the fields. With that, equality resolves
+         WITHOUT a heuristic on most rows:
+           unedited (rowVer >= 142, no editedAt)  equality can ONLY come from tapBack calling
+                                        Date.now() twice in one millisecond -- nothing else in
+                                        the app writes two identical stamps. FABRICATED. Blank.
+                                        Minute alignment is irrelevant here: unedited is decisive.
+           edited (rowVer >= 142, editedAt set)   flattening is now possible, so equality is
+                                        AMBIGUOUS: flattened real taps, or a laundered
+                                        fabrication. Stays BLANK and is offered to the driver
+                                        for the two-tap vouch. NOT promoted silently.
+           legacy (no rowVer)           unchanged v1.41 heuristic: off-minute => fabricated,
+                                        on-minute => measured 0. Kept because the analysis chat
+                                        bounded its cost at zero in the 08/10 file, and because
+                                        those rows carry no better evidence. Legacy only.
+         `Edited At` and `Edit Count` ARE EXPORTED. The analysis chat asked for an explicit mark
+         and it is owed one: the Stops wipe was doing that job by accident and this build's
+         predecessor removed it. Now it is deliberate, on every row, and does not depend on a bug.
+         `Rows Delivered Ambiguous` on the summary line counts rows sitting in the ambiguous
+         state, so a file discloses its own unresolved provenance instead of hiding it in a blank.
+         RECORDED -- analysis chat's retraction, and it corrects this file too. TRUNCATION OF A
+         DIFFERENCE IS UNBIASED IN THE MEAN, not downward: a gap reads as the number of minute
+         boundaries it crosses, which is correct in expectation for ANY gap (0.33 min reads 0.334,
+         0.50 reads 0.501). The v1.40 header recorded "biased down and one-sided" from the earlier
+         analysis; THAT IS WITHDRAWN. What survives is narrower: the COUNT OF EXACT ZEROS is
+         inflated, because a genuine 20-second lag reads 0 about two-thirds of the time. So 11%
+         zero-lag remains an UPPER BOUND on real zeros, while the lag MEAN needs no correction.
+         Lag quantization SE 0.047 against sampling SE 0.625 -- thirteen times smaller. No refit.
+         ALSO RECORDED: 07/27 settled as a measured 0, DD week A = 13.22, n=22. And a warning for
+         the tracker: any export taken BETWEEN v1.39 and v1.40 is the contaminated one -- strict
+         `>` was in force before v1.39, so in the 08/10 file a blank means exactly-equal stamps
+         and a 0 means a real sub-minute gap.
+  v1.41: FLATTENING IS STRICTLY WITHIN-MINUTE (answered), `Return Source` exported, and a
+  v1.41: FLATTENING IS STRICTLY WITHIN-MINUTE (answered), `Return Source` exported, and a
+         CORRECTION to what v1.39 claimed about legacy rows.
+         ANSWER: STRICTLY WITHIN-MINUTE. msToClock() TRUNCATES -- getHours()/getMinutes(), seconds
+         and ms discarded -- and parseClockToMs() rebuilds at the same H:M with seconds=0, ms=0.
+         The round trip therefore moves a stamp BACKWARD to the start of its own minute and can
+         never cross a minute boundary. Bounded by <60s, one direction, always.
+         ONE CAVEAT, and it is a DAY boundary, not a minute one: parseClockToMs() rolls the date
+         forward when the parsed time lands more than 12h before the anchor, so a run that
+         crosses midnight keeps its H:M and gets the correct date. H:M is preserved exactly.
+         SECOND-ORDER EFFECT worth stating: truncation deflates a sub-minute gap to 0 only when
+         both stamps sit in the SAME minute. A 20-second gap that straddles the boundary --
+         12:13:50 -> 12:14:10 -- truncates to 12:13 and 12:14 and INFLATES to a full minute. The
+         quantization is +/-1 min on the rounded value, not a one-sided pull to zero.
+         SO THE 07/27 11:47 DD ROW IS A MEASURED 0. Both stamps in one minute, both real taps
+         (the analysis chat established it is a tap, not an auto-close: an auto-close would have
+         written backAt = 12:16 and the file carries 12:13). No driver confirmation needed.
+         CORRECTION TO v1.39. That header said legacy rows "cannot be reclassified" and "stay
+         BLANK rather than being promoted". THE CODE DID NOT DO THAT. The test read
+         `e.deliveredInferred ? strict : >=`, and a pre-v1.39 row has no such field, so undefined
+         fell to the `>=` branch and legacy equal-stamp rows were promoted to a measured 0 --
+         including genuinely fabricated ones. The claim was wrong, not the intent. Fixed here by
+         making provenance THREE-STATE instead of boolean:
+           deliveredInferred === true   fabricated by tapBack. BLANK. Unchanged.
+           equal stamps, NOT minute-aligned  can only come from tapBack calling Date.now() twice
+                                        in one millisecond. Landing exactly on :00.000 by chance
+                                        is ~1 in 60,000. Treated as FABRICATED -> BLANK. This is
+                                        what v1.39 should have done and did not.
+           equal stamps, minute-aligned, not marked  the flattening signature. Two real taps
+                                        inside one minute -> MEASURED 0, per the analysis chat's
+                                        ruling. No confirmation required.
+         `Return Source` -- NEW COLUMN, appended. The analysis chat's point, and it is right: the
+         two N writers measure different quantities and must not pool silently.
+           TAP         a thumb moved. Ends when the driver pressed BACK or FED NEXT PICKUP.
+           AUTO-CLOSE  ends when the NEXT OFFER WAS ACCEPTED, so it ABSORBS BOARD WAIT. Inferred.
+           DERIVED     DD return inferred from the next pickup's start (v1.30).
+           (blank)     no return leg on this row.
+         Measured gap on DD: AUTO-CLOSE averages 9.58 min against TAP at 3.40 -- the difference is
+         board wait sitting inside a leg that reads like a return trip. At minute resolution 33 of
+         47 N rows carry the auto-close signature, so this is most of the population, not an edge
+         case. In-app the match is on the exact millisecond, so the app's count may differ from a
+         minute-resolution count either way; the app's is the stricter test.
+         NOTE ON COVERAGE: the retroactive match compares backAt against accept stamps IN THE
+         SAME EXPORT WINDOW. A run auto-closed by an accept outside the 14-day history has nothing
+         to match and still reads TAP. AUTO-CLOSE is a LOWER BOUND at the window edges.
+  v1.40: WHAT `Return Kind = N` MEANS -- answered from the code, plus three fixes it exposed.
+  v1.40: WHAT `Return Kind = N` MEANS -- answered from the code, plus three fixes it exposed.
+         THE ANSWER. N means FED NEXT PICKUP: the run never went back to idle. It has TWO
+         writers, and they are not the same kind of fact:
+           1. A TAP. The capture bar's "FED NEXT PICKUP" button calls tapBack(i,'N') and stamps
+              backAt at the moment the driver pressed it. MEASURED.
+           2. BY CONSTRUCTION. analyze() auto-closes a delivered-but-unclosed run when the NEXT
+              offer is accepted: `backAt = this accept time; returnKind = 'N'`. NO TAP HAPPENED.
+              backAt is the next row's accept stamp, to the millisecond.
+         So the N return leg measures DROP -> the moment the next commitment began, not a drive
+         back. That is why N-kind legs run 2-16 min and average 6.77 on DD: they are the tail
+         between the drop and the next accept, not a return trip.
+         FOR THE 07/27 11:47 DD ROW the app's answer is NEITHER 0 NOR 14. Delivered 12:13, next
+         Spark accepted 12:16 -> the auto-close wrote backAt = 12:16 and the leg is 3 min. 14
+         would be drop -> next run STARTED (12:27), which this app has never measured on any row.
+         0 would be the drive-back answer, and the driver is right that no drive back occurred.
+         WHICH ONE BELONGS IN A DD RATE IS NOT THE APP'S CALL and is not decided here. What the
+         app now guarantees is that the analysis chat can TELL THE TWO APART, which it could not
+         before: an auto-closed N was indistinguishable from a tapped N in the export.
+         FIX 1 -- AUTO-CLOSED N IS NOW `DERIVED`, NOT `YES`. Same reasoning that keeps
+         DD-OCCUPIED-DERIVED out of return fits: a leg whose endpoint is another row's accept
+         stamp is inferred, not observed. Marked going forward (`backInferred` at the auto-close)
+         AND detected retroactively -- an auto-closed backAt equals a later row's acceptedAtMs to
+         the exact millisecond, which two human taps never do. So HISTORY RECLASSIFIES ITSELF on
+         the next export; no re-entry, no guessing.
+         FIX 2 -- saveEdit() WAS DROPPING Stops AND Items ON DD/UE. Confirmed: analyze() stores
+         stops for EVERY platform, but saveEdit() cleared them for any platform outside the Spark
+         trio. So editing a DD row -- for any reason, including fixing a stamp -- silently wiped
+         its Stops. That is the fingerprint the analysis chat spotted on the blanked 07/27 row,
+         and it is independent corroboration that the row was edited, which is what flattened its
+         stamps. Edits now preserve stops/items instead of clearing them.
+         FIX 3 -- THE v1.39 CONFIRM WAS A CLICK-THROUGH, exactly as the analysis chat warned.
+         The Delivered box is PRE-FILLED from the stamp, so "the box is non-blank at save" was
+         true on every save and the inferred mark cleared whether or not the driver recalled
+         anything. It now clears ONLY if the driver either CHANGES the value or taps an explicit
+         two-tap "I REMEMBER THIS DROP" control that appears solely on inferred rows. Clicking
+         through the modal no longer promotes a fabricated stamp to a measurement.
+         DIAGNOSTIC the analysis chat asked for, since the CSV cannot carry it: `Rows Minute
+         Snapped` on the summary line counts rows whose three stamps are ALL exactly divisible by
+         60000 ms -- the signature of a row that went through the old flattening edit path. The
+         export truncates to the minute, so this can only be counted in-app.
+         RECORDED, analysis chat: edit-flattening quantization SE is 0.063 min on DD return,
+         0.049 on Spark return, 0.038 on lag -- roughly two orders below sampling noise. No
+         constant moves, no refit changes, history stands. LAG IS THE EXPOSED LEG: the
+         cancellation argument fails at the floor -- 11% zero, 36% at or under 1 min, biased down
+         and one-sided. Run bottoms out at 3 min and Spark return never reaches 0, so neither is
+         exposed. TREAT THE ZERO-LAG COUNT AS AN UPPER BOUND.
+  v1.39: A MEASURED ZERO-LENGTH RETURN IS NO LONGER LOST -- and edits stop destroying precision.
+  v1.39: A MEASURED ZERO-LENGTH RETURN IS NO LONGER LOST -- and edits stop destroying precision.
+         THIS LOOKS LIKE THE v1.31 DEAD END. IT IS NOT. Read this before touching the comparison.
+         v1.31 reverted `backAt >= deliveredAt` to strict `>` on the argument that exact
+         millisecond equality has EXACTLY ONE source: the missed-Delivered fallback in tapBack(),
+         which fabricates deliveredAt and sets backAt on the next line, landing both in the same
+         millisecond. Under that premise `>=` would encode a fabricated stamp as an observation,
+         and the revert was right.
+         THE PREMISE IS NO LONGER TRUE. There is a SECOND source, and it is the edit modal.
+         saveEdit() re-anchors all three stamps through parseClockToMs() at CLOCK-MINUTE
+         granularity, every save, whether or not the driver touched them. So:
+           - a genuine 20-second return exports Return Min 0 (correct, as v1.31 said) ...
+           - ... until ANY edit to that row -- changing PAY alone is enough -- snaps Delivered
+             and Back into the same minute, makes them exactly equal, fails strict `>`, and the
+             measured return leg SILENTLY BECOMES BLANK.
+         So the observation really was being lost, just not by the route v1.31 examined. That is
+         why the analysis chat sees a blank return on a row where Back At == Delivered At.
+         THE FIX IS PROVENANCE, NOT `>=`. Flipping the comparison globally would re-encode the
+         fabricated pair as a measured zero -- the exact harm v1.31 identified. Instead:
+           1. tapBack() now MARKS the fabrication: `deliveredInferred = true` when it invents a
+              Delivered stamp. Equality on such a row still exports BLANK. Nothing measured.
+           2. Equality is accepted as a real 0 ONLY when Delivered was not inferred.
+           3. saveEdit() PRESERVES SUB-MINUTE PRECISION: if the clock value in the box still
+              matches the stamp already on the row, the original millisecond stamp is kept
+              instead of being re-parsed. An unrelated edit can no longer flatten a measured leg.
+           4. Entering an explicit Delivered time in the edit modal CLEARS deliveredInferred --
+              a human asserting the stamp outranks the app's fallback.
+         LEGACY ROWS CANNOT BE RECLASSIFIED FROM THE FILE. A pre-v1.39 row with equal stamps
+         carries no provenance, and the two sources are indistinguishable in the CSV. Those stay
+         BLANK rather than being promoted to a zero nobody recorded. THE REMEDY IS A HUMAN: open
+         that row in the edit modal, confirm the Delivered time, save. That asserts the stamp and
+         the return exports as 0. This is the one path by which the analysis chat's fourth row
+         can be completed, and it requires the driver to vouch for it.
+         SHAPE LIST, corrected and extended (analysis chat). Five ways a triple is partial:
+           MISSING STARTED    run absorbs the lag, row reconciles, RUN OVERSTATED. Invisible.
+           MISSING DELIVERED  run/return/idle blank. Fails reconciliation.
+           MISSING BACK       return/idle blank. Fails reconciliation.
+           LAG BLANK, STARTED PRESENT  the ACCEPT stamp is the problem, not a missed tap:
+                              startedAt <= acceptedAtMs, so no lag is computable. RUN IS
+                              CORRECT and not inflated, and the row reconciles cleanly. THE
+                              DRIVER CANNOT FIX THIS RETROACTIVELY -- there is no tap to make --
+                              so the export panel must not tell him to make one. Counted and
+                              worded separately from here on.
+           RETURN BLANK ON EQUAL STAMPS  fixed above.
+         RECONCILIATION CATCHES LESS THAN v1.38 CLAIMED. On the analysis chat's export it catches
+         AT MOST 1 OF 4: three reconcile perfectly and the fourth is short by exactly 2, sitting
+         ON the +/-2 boundary rather than outside it. v1.38's header said two of the shapes fail
+         the check; that overstated the coverage. The silent-row problem is LARGER than stated,
+         which strengthens the case for the Minutes Complete flag rather than weakening it -- the
+         flag is not a convenience over reconciliation, it is the only thing that finds these.
+         NO CONSTANT MOVES. Gate figures unchanged and recorded: Spark A 18.21, Spark B 19.76,
+         DD A 13.03, DD B 12.82.
+  v1.38: `Minutes Complete` -- the Lag/Run/Return triple now declares whether it is whole.
+  v1.38: `Minutes Complete` -- the Lag/Run/Return triple now declares whether it is whole.
+         THE PROBLEM (analysis chat): 4 of 115 accepted rows exported a PARTIAL triple -- 07/27
+         DD, 07/31 DD, 07/31 Spark Shop, 08/01 Shop+Pharmacy. A consumer that sums the three
+         columns independently divides by a denominator missing a leg and silently inflates the
+         rate. It did exactly that downstream before anyone noticed.
+         WHY THE FLAG AND NOT ALL-OR-NOTHING. The analysis chat offered either. Suppression is
+         the wrong half: blanking a whole triple because one leg is missing DESTROYS TWO
+         MEASURED LEGS to hide the third, on the one build principle this project has never
+         broken -- never substitute a model, or a blank, for an available measurement. It would
+         also break the reconciliation identity on precisely those rows.
+         WHAT A PARTIAL ROW ACTUALLY LOOKS LIKE. Measured, not assumed -- an earlier draft of
+         this note claimed the missing minutes land in Idle and the row still reconciles. That
+         is wrong, and only one of the three shapes is invisible:
+           MISSING STARTED   lag blank, but runFrom falls back to acceptedAtMs, so RUN ABSORBS
+                             THE LAG. Idle and Cycle are both present and the row RECONCILES
+                             PERFECTLY -- Lag+Run+Return+Idle == Cycle. Run is overstated by
+                             exactly the lag. THIS IS THE DANGEROUS ONE: the identity cannot
+                             catch it, and any per-leg run model fitted across rows is biased.
+           MISSING BACK      return blank, and idleMin is gated on occFromBack, so Idle is blank
+                             too. The legs sum SHORT of the cycle and the row FAILS the +/-2
+                             reconciliation. Catchable, if the check is run per row.
+           MISSING DELIVERED run, return and idle all blank. Fails reconciliation the same way.
+         Measured on synthetic rows in the harness, which asserts all three shapes so the
+         taxonomy cannot drift without a failure.
+         THE COLUMN. `Minutes Complete`, appended, four states:
+           (blank)  row not accepted -- no triple is expected, nothing is missing
+           YES      lag, run and return all present and all MEASURED
+           DERIVED  all three present, but the return leg was DERIVED (DD chained into the next
+                    pickup, v1.30). Complete for reconciliation, NOT an observation -- keep it
+                    out of any DD return fit, per the project's standing rule
+           NO       at least one leg is missing. Which one is visible from the blanks
+         DD rows missing a return leg are the dangerous case and are the reason DERIVED is not
+         folded into YES: a DD row with run-only minutes is the exact shape of the measurement
+         illusion v1.33 was built to close ($18.56/hr run-only vs $13.71 on occupied minutes).
+         SUMMARY LINE: `Rows Minutes Complete`, `Rows Minutes Derived`, `Rows Minutes Partial`,
+         so the export declares its own coverage without a row scan.
+         AT THE LINE: the export panel now says how many rows are short a leg, because the real
+         fix is a tap that did not happen. The column makes the data honest; the note is what
+         stops it recurring.
+         NOT A NEW MEASUREMENT. This build adds no timing, changes no stamp, moves no constant
+         and alters no existing column. Every historical row keeps the minutes it always had.
+         RECORDED, analysis chat's correction to its own prior figures: Spark week A is 18.21,
+         NOT 18.94; DD week A is 13.03, NOT 14.17. No constant moves and the Q1-Q4 rulings in
+         the v1.35 block stand unchanged, since none of them depended on those two numbers. The
+         superseded values are named here on purpose so nobody re-derives from an old paste.
+  v1.37: CANCELED CHIP. Small build, one idea.
+  v1.37: CANCELED CHIP. Small build, one idea.
+         WHY. Un-accepting a run had exactly one story: "passed -- why?". But a run that was
+         accepted and then CANCELED is not a pass. It was taken, it occupied real minutes, and it
+         stopped being an accept for a reason the driver did not choose. Filing it under the same
+         six pass-reasons made a cancel indistinguishable from a decline that never happened.
+         FLAT `canceled`, no by-whom split. Driver's call, and the right one: the distinction
+         between an unassign, a customer cancel and a platform pull is not reliably knowable at
+         the moment it happens, and a field that cannot be recorded honestly is a column of
+         guesses. New ENUM MEMBER on the existing `Decline Reason` column -- never a suffix, no
+         new column, no CSV shape change.
+         `everAccepted` is a new row flag, set when a row is accepted (at check, at pending
+         resolve, or by hand) and never cleared. It is what separates "this was mine and then it
+         wasn't" from "I passed on this". Pre-v1.37 rows do not carry it and fall back to the old
+         pass-only chip row -- absent is not false, it is unknown, and an old row is not
+         retroactively claimed to have been accepted.
+         `canceled` IS OFFERED ONLY WHERE IT CAN BE TRUE. A row that was never accepted cannot
+         have been canceled, so the chip does not appear there. The pass reasons stay available
+         on a canceled row too: a cancel can still have a cause worth recording.
+         PENDING rows can now carry reasons. A hand-accepted pending (v1.35 UNRESOLVED, verdict
+         still PENDING) that then cancels had no chip row at all before this build.
+         KNOWN GAP, flagged not built: `accepted` gates the money sums, so a canceled run that
+         still paid something -- half pay, a cancellation fee -- contributes $0 to Accepted Pay
+         and Earned. Recording that needs a pay-on-canceled path, which is a bigger change than
+         this one and wants the analysis chat's view on which denominator it belongs in.
+         NOT IN THIS BUILD: no gate constant moved, no CSV column added, no format changed.
+  v1.36: THE LIVE GAS RATE IS NOW CHOSEN BY FUEL DATE, NOT BY ENTRY ORDER.
+  v1.36: THE LIVE GAS RATE IS NOW CHOSEN BY FUEL DATE, NOT BY ENTRY ORDER.
+         THE BUG. `gas` read fillups[0].cpm and saveFillup() used unshift, so the live rate was
+         whichever receipt was TYPED LAST. saveFillup() also assigned `gas = cpm` outright. Enter
+         a receipt from three days ago to catch up the log and it silently became the rate every
+         subsequent offer was judged against. Every dollar figure in the app is downstream of
+         this one number: net, net/hr, the accept gate, the pay floor, Net After Gas on every
+         exported row. Prioritized by the analysis chat ahead of the CANCELED chip for exactly
+         that reason -- it can silently rescore every net figure in the model.
+         WHY ORDERING BY `ts` WAS NOT THE FIX. ts is the ENTRY stamp. A receipt entered late gets
+         today's ts, so sorting by it puts the old receipt first all over again. The app never
+         asked when the fuel was actually bought, so the information needed to order the list
+         correctly did not exist in the file. That is the real defect; ordering was the symptom.
+         THE FIX, two parts, and neither works alone:
+           1. A Fuel Date field on the fillup form, defaulting to today. One tap for the normal
+              case (filling up now), editable when catching up an old receipt.
+           2. liveFillup() picks the entry with the LATEST FUEL DATE, tie-broken by latest entry
+              stamp so a same-day correction still wins. Every reader goes through it -- init,
+              saveFillup, gasStaleDays, the history list.
+         SAVING NO LONGER FORCES THE RATE. saveFillup() recomputes from liveFillup() instead of
+         assigning cpm. Log a receipt older than the newest one and it is stored, dated and
+         charted, but the live rate does not move -- and the app says so on the panel rather than
+         changing the number under the driver.
+         LEGACY ROWS ARE INFERRED, NOT INVENTED. Pre-v1.36 entries have no fuel date, so their
+         entry stamp is used as a stand-in and the history list marks them `~` for inferred. For
+         every fillup entered at the pump -- the normal case -- entry date IS fuel date, so the
+         stand-in is exact. Where it is wrong it is wrong in the one known way: a late entry
+         reads as newer than it was. Stored rows are NOT rewritten; the inference happens at read
+         time, so nothing in the file is back-dated to a date nobody recorded.
+         STALE CLOCK NOW RUNS FROM THE FUEL DATE. GAS_STALE_DAYS (10) counts from when the fuel
+         was bought, not when it was typed. A receipt entered three days late used to reset the
+         clock to zero and hide a rate that was already stale.
+         FUTURE DATES REJECTED at entry, inline, with the reason -- a mistyped future date would
+         take over the live rate and hold it against every later receipt.
+         NO CSV CHANGE, no column added, no format moved, no basis boundary. Historical rows keep
+         the gas figure they were scored with; this build only changes which rate a FUTURE offer
+         is judged against.
+         NOT IN THIS BUILD: no gate constant moved. The miles convention is untouched -- the app
+         still charges cpm on miles-since-last-fillup, and the log still records miles forward.
+         Those are two different tanks and both are internally consistent; see saveFillup().
+  v1.35: PENDING STATE + FACE-VALUE ENTRY. Confirmed on the real board at 2.9 pends/day against
+         a 2.8 estimate. Routing floors HELD at 30/12 by the analysis chat: real-board rates are
+         0 of 39 below the floors vs 5 of 44 above, sharper than this chat's synthetic sweep, and
+         the six DECLINE-reachable misses that sweep found do not occur on the real board. NO
+         Shop+Pharmacy exception -- worth 0.33 pends/day, and its observed item max is 35, too
+         close to HIGH_ITEM_CAP to branch on.
+         PENDING MIN RULING (analysis chat): strip it from lag fits, keep it in realized and
+         occupancy, keep it OUT of the gate denominator until re-derived. PREDICTED_LAG_MIN stays
+         a pure offer->start model; look time becomes a separate conditional term once Pending Min
+         reaches n~30, and any denominator change ships paired with the bar. IT IS MEASURED, NOT
+         INFERRED -- do not file Pending Min under the DD-OCCUPIED-DERIVED exclusion rule.
+  v1.35: PENDING STATE + FACE-VALUE ENTRY. The largest flow change since v1.22.
+         WHY. Item count is not on the Spark offer card -- it is one level deeper. The app had
+         no way to say "I need to look", so the only route to the item screen was to accept and
+         reverse. That inverts the purpose of a pre-commitment check and puts false ACCEPT and
+         DECLINE pairs in the record. There is now a third outcome at the line.
+         THE RULE (analysis chat, n=221 Spark offers with items recorded):
+           fails the rate bar                          -> DECLINE now, items never asked
+           clears the bar, raw est >= 30 AND pay >= 12 -> PENDING, resolves only on items
+           clears the bar, raw est < 30 OR pay < 12    -> ACCEPT now, items optional
+         Basis for the two floors: 0 of 59 offers with est < 30, and 0 of 10 with pay < 12, had
+         items over HIGH_ITEM_CAP. Below either floor the count cannot change the verdict, so
+         asking would buy nothing. Costed at ~2.8 pending states/day, ~1/day an extra look on an
+         offer that ends up declined.
+         PENDING IS NOT AN ACCEPT. accepted stays NO, no prior run is auto-closed, the capture
+         bar does not pick it up, and NOTHING IS CLEARED -- pay/miles/est/stops/ready/platform/
+         travel/FCFS are all held so the offer survives the trip into Spark and back. Enter
+         items, tap CHECK, and the SAME ROW resolves in place. No second row, and no
+         accept-then-reverse path anywhere in the app.
+         RESOLUTION IS A FULL RECOMPUTE, not just the item cap. Items feed getTimeBuffer, so a
+         resolve can land on ACCEPT, MARGINAL (cap, or overrun pushing net/hr under the accept
+         line) or DECLINE (overrun pushing it under the marginal floor). All three are real.
+         SAME-OFFER TEST: resolution requires the face values to be unchanged, compared on a
+         signature of platform|pay|miles|est|stops|ready|travel|FCFS. Change any of them and it
+         is a different offer -- new row, and the old one closes as UNRESOLVED.
+         PENDING ONLY WHERE ITEMS EXIST: Spark Shop / Curbside / Shop+Pharmacy. DD/UE, Pharmacy
+         and Customer Return can never pend. MARGINAL never pends either -- the item cap only
+         downgrades an ACCEPT, so on a marginal offer the count is not decision-relevant.
+         NEVER A SILENT BLANK: every row that ever pended carries a Pending State --
+         RESOLVED (items arrived), UNRESOLVED (accepted by hand, or superseded by a different
+         offer, without items) or OPEN (still waiting at export time). Blank means never pended.
+         `Pending Min` is the wall-clock cost of the look, offer stamp -> resolve.
+         BASIS NOTE for the analysis chat: acceptedAtMs still stamps at ROW CREATION, i.e. when
+         the offer was first checked, exactly as in v1.34. So on a resolved row the cycle now
+         opens before a trip into Spark that did not exist in the old flow. PREDICTED_LAG_MIN (6)
+         does not model that look. Pending Min measures it; whether the lag term should absorb
+         it is the analysis chat's call, not built here.
+         CSV: `Pending State` and `Pending Min` appended at the end. `Unlogged Declines Spark`,
+         `Unlogged Declines DD` and `Log Completeness` appended to the summary line.
+         `Net Hr Rate` now exports 2dp instead of 0dp -- SAME COLUMN, same position, more
+         precision. A 15.3 bar cannot be audited from a file where 15.4 and 15.0 both print 15.
+         This is a VALUE-FORMAT change on an existing column and the only non-append in this
+         build: any parser doing string equality on that cell needs a numeric compare. Every
+         row exported before v1.35 carries 0dp and cannot be recovered to 2dp after the fact.
+         UNLOGGED DECLINES: +1 counters in the shift bar, split Spark / DD, stored on the shift
+         record so they ride into the 14-day history. Log Completeness derives FULL / PARTIAL
+         from them and is exactly as honest as the taps -- it cannot detect a decline nobody
+         recorded. FULL means "I recorded every offer I saw", not "the app verified it".
+         VERSION INDICATOR in the header, driven by APP_VERSION, so the build running on the
+         phone can be identified without opening the file.
+         NOT IN THIS BUILD: no gate constant moved. SPARK_ACCEPT_HR, SPARK_MARGINAL_HR,
+         HIGH_ITEM_CAP, DD_RETURN_MIN, DDUE_FILLER_*, PREDICTED_LAG_MIN, HARD_DECLINE_MIN,
+         CYCLE_BREAK_MIN and the long-run rule are untouched. PENDING_EST_MIN and
+         PENDING_PAY_MIN are routing floors, not gates: they decide whether to ASK for items,
+         never whether a run is worth taking.
+         WITHDRAWN THIS BUILD: the 08/01 fillup re-entry. See the note at saveFillup().
+  v1.34 ANNOTATION 2026-08-04 -- COMMENT ONLY, ZERO EXECUTABLE CHANGE. Version deliberately NOT
+         bumped: nothing runs differently, and a version bump would imply a build where there
+         was none. The DD_RETURN_MIN provenance note was wrong and is corrected in place -- 6.5
+         was fitted including 2 derived return legs; measured-only is 5.97. Bar and flatness
+         unaffected; folded into the next refit by the analysis chat's call. The resulting bias
+         is bounded, conservative and quantified at the constant. Recorded rather than silently
+         patched, because a wrong causal story left standing in a comment is worse than the
+         original error.
   v1.34: FILLER CAP MOVED TO THE HONEST UNIT. Four executable lines differ from v1.33.
          DDUE_FILLER_MAX_MIN 25 (raw est) -> 31.5 (committed), and both DD verdict paths plus
          the decline-reason line now test and quote committed time.
@@ -560,6 +1325,16 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 .app-title { font-family: var(--display); font-size: 26px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; font-style: italic; }
 .app-title span { color: var(--green); font-style: normal; }
 .app-sub { font-size: 11px; color: var(--muted); margin-top: 3px; font-style: normal; letter-spacing: 0.05em; }
+/* v1.35: the running build, visible without opening the file. Text comes from APP_VERSION -- one
+   source, so the chip cannot drift from the constant the way a hand-typed header would. */
+.app-ver {
+  font-family: var(--mono); font-size: 11px; font-weight: 500; font-style: normal;
+  color: var(--muted); background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 6px; vertical-align: middle; letter-spacing: 0.02em;
+}
+/* v1.35: PENDING points at the one box it is waiting for. Purple matches the pending banner. */
+.input-block.items-wait { border-color: var(--purple); box-shadow: 0 0 0 3px var(--purple-dim); }
+.input-block.items-wait label { color: var(--purple); }
 
 .gas-badge {
   background: var(--surface);
@@ -936,6 +1711,9 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
   font-size: 10px; padding: 4px 10px; cursor: pointer; transition: all .15s;
 }
 .reason-chip.on { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); font-weight: bold; }
+/* v1.37: a cancel is not a pass. Red so it does not read as one more reason you declined. */
+.reason-chip.cancel { border-color: var(--red-b); color: var(--red); }
+.reason-chip.cancel.on { background: var(--red-dim); border-color: var(--red); color: var(--red); font-weight: bold; }
 
 /* Accepted-run actuals capture */
 .acc-card { background: var(--surface2); border: 1px solid var(--border2); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
@@ -1096,7 +1874,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 
 <header>
   <div>
-    <div class="app-title">RUN<span>CHECK</span></div>
+    <div class="app-title">RUN<span>CHECK</span> <span class="app-ver" id="appVer">--</span></div>
     <div class="app-sub">delivery run analyzer</div>
     <div id="todayDate" style="font-size:12px;color:var(--amber);margin-top:4px;font-weight:500;letter-spacing:0.02em;"></div>
   </div>
@@ -1139,6 +1917,13 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
         <div class="fu-unit">since last fillup</div>
       </div>
     </div>
+    <!-- v1.36: when the fuel was BOUGHT, which is what orders the list and picks the live rate.
+         Defaults to today, so filling up now is still a three-field entry. -->
+    <div class="fu-block" style="margin-top:8px;">
+      <label>Fuel Date</label>
+      <input type="date" id="fuDate">
+      <div class="fu-unit">when you bought it -- set this back if you are catching up an old receipt</div>
+    </div>
     <div class="fu-preview">
       <div>
         <div class="fp-label">Calculated gas cost / mile</div>
@@ -1149,6 +1934,7 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
       </div>
     </div>
     <button class="fu-btn" id="fuSaveBtn" onclick="saveFillup()" disabled>SAVE &amp; SET GAS COST</button>
+    <div id="fuNote" style="font-size:11px;color:var(--muted);margin-top:8px;text-align:center;line-height:1.4;"></div>
   </div>
 
   <div class="gas-pane" id="pane-history">
@@ -1247,6 +2033,9 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
         <button onclick="adjustShiftHrs(0.5)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:16px;font-weight:bold;width:34px;height:34px;border-radius:8px;cursor:pointer;flex-shrink:0;line-height:1;">+</button>
       </div>
       <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">hrs &nbsp;&middot;&nbsp; <span id="offersPerHr">--</span> offers/hr<span id="hrsStampNote" onclick="resetHoursToStamps()" style="cursor:pointer;"></span></div>
+      <!-- v1.38: a missing leg is a tap that did not happen. Say so while the day can still be
+           fixed, rather than leaving it to be found in the export a week later. -->
+      <div id="minsCompleteNote" style="font-size:10px;text-align:center;margin-top:4px;"></div>
     </div>
     <div id="pastBreakRow" style="display:none;margin-bottom:10px;">
       <button id="pastBreakToggle" onclick="togglePastBreaks()" style="background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;text-decoration:underline;width:100%;text-align:center;">fix a break on another day</button>
@@ -1283,9 +2072,11 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     <div class="input-unit">$</div>
     <input type="text" inputmode="numeric" id="inPay" placeholder="0.00" oninput="clearResult()" onblur="payBlur(this)" autocomplete="off">
   </div>
-  <div class="input-block">
+  <div class="input-block" id="itemsBlock">
     <label>Items</label>
-    <input type="number" inputmode="numeric" id="inItems" placeholder="--" step="1" min="0" oninput="clearResult()">
+    <!-- v1.35: NOT clearResult(). While a pending is open the verdict card is the instruction
+         ("enter items, tap CHECK") and wiping it mid-type would take the instruction away. -->
+    <input type="number" inputmode="numeric" id="inItems" placeholder="--" step="1" min="0" oninput="itemsInput()">
   </div>
   <div class="input-block" style="display:flex;flex-direction:column;justify-content:center;align-items:center;gap:5px;">
     <label id="travelLabel" style="margin:0;">home store</label>
@@ -1364,6 +2155,28 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
     <div class="pace-stat">
       <div class="pace-stat-val" id="shDD" style="color:var(--muted);">0m</div>
       <div class="pace-stat-lbl">DD work</div>
+    </div>
+  </div>
+  <!-- v1.35: unlogged declines. Tap when you wave one off without checking it. -->
+  <div style="margin-top:10px;background:var(--surface2);border-radius:8px;padding:8px 10px;">
+    <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;text-align:center;margin-bottom:6px;">unlogged declines &nbsp;<span id="unState" style="color:var(--muted);"></span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="display:flex;align-items:center;gap:6px;justify-content:center;">
+        <button onclick="bumpUnlogged('spark',-1)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:14px;font-weight:bold;width:28px;height:28px;border-radius:6px;cursor:pointer;line-height:1;">-</button>
+        <div style="text-align:center;min-width:44px;">
+          <div class="pace-stat-val" id="unSpark" style="color:var(--green);">0</div>
+          <div class="pace-stat-lbl">spark</div>
+        </div>
+        <button onclick="bumpUnlogged('spark',1)" style="background:var(--green-dim);border:1px solid var(--green);color:var(--green);font-family:var(--mono);font-size:14px;font-weight:bold;width:28px;height:28px;border-radius:6px;cursor:pointer;line-height:1;">+</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;justify-content:center;">
+        <button onclick="bumpUnlogged('dd',-1)" style="background:var(--border);border:none;color:var(--text);font-family:var(--mono);font-size:14px;font-weight:bold;width:28px;height:28px;border-radius:6px;cursor:pointer;line-height:1;">-</button>
+        <div style="text-align:center;min-width:44px;">
+          <div class="pace-stat-val" id="unDD" style="color:var(--blue);">0</div>
+          <div class="pace-stat-lbl">doordash</div>
+        </div>
+        <button onclick="bumpUnlogged('dd',1)" style="background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);font-family:var(--mono);font-size:14px;font-weight:bold;width:28px;height:28px;border-radius:6px;cursor:pointer;line-height:1;">+</button>
+      </div>
     </div>
   </div>
   <div id="shiftNote" style="font-size:10px;color:var(--muted);margin-top:8px;text-align:center;">offers logged with no shift open still log and score -- they just sit outside shift-hour math</div>
@@ -1573,6 +2386,12 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
         <input type="time" id="editDelivered">
       </div>
     </div>
+    <!-- v1.40: only appears when this row's Delivered stamp was FABRICATED by tapBack. Two taps,
+         and worded so it cannot be answered by reflex -- the point is recall, not a click. -->
+    <div id="deliveredInferredRow" style="display:none;margin-top:8px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:8px;padding:8px 10px;">
+      <div style="font-size:11px;color:var(--amber);line-height:1.4;">Delivered was never tapped on this run -- the app filled this time in when you tapped Back. The return leg stays blank until you vouch for it.</div>
+      <button id="deliveredConfirmBtn" onclick="armDeliveredConfirm()" style="margin-top:8px;width:100%;background:var(--surface2);border:1.5px solid var(--amber);color:var(--amber);font-family:var(--mono);font-size:11px;font-weight:bold;border-radius:6px;padding:8px;cursor:pointer;">I REMEMBER THIS DROP TIME</button>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
       <div class="modal-field" style="margin-bottom:0;">
         <label>Back</label>
@@ -1629,6 +2448,10 @@ header { padding: 22px 20px 0; display: flex; justify-content: space-between; al
 // is looking is the failure mode; a fresher number does not fix that, so the fallback is now
 // LOUD (see gasIsDefault / gasStaleDays below) as well as current.
 // Live at time of build (07/27/2026) = $0.3175/mi.
+// v1.35: single source for the build number. The header chip reads this; nothing else states a
+// version in executable code, so the chip cannot disagree with the build.
+var APP_VERSION = 'v1.54';
+
 var GAS_SHIPPED_DEFAULT = 0.3175;
 var GAS_DEFAULT_SET_ON = '2026-07-27';
 // A fillup older than this stops being evidence about today's pump price. The rate moved
@@ -1638,7 +2461,14 @@ var gas = GAS_SHIPPED_DEFAULT;
 // True while no fillup and no manual entry has ever been supplied -- i.e. the number on screen
 // is the shipped constant, not a measurement. Drives the warnings.
 var gasIsDefault = true;
-// === TUNABLE: DD/UE filler branch net/hr floor. Provisional 15 (was 20): DD fills idle only, so a quick (<=25min) $5-6 net run beats $0 idle. Monitor -- small risk of missing a Spark ping mid-run. ===
+// === TUNABLE: DD/UE filler branch net/hr floor. DD fills idle only, so a short net-positive run
+// beats $0 idle. Small standing risk: missing a Spark ping mid-run. ===
+// v1.35 CORRECTION, comment only. This banner still read "Provisional 15 (was 20)" and
+// "a quick (<=25min)" while the constant below was 10.2 and the cap had moved to 31.5 on
+// COMMITTED time. Both numbers had been dead since v1.33/v1.34 and the corrected account was
+// sitting four lines underneath, so the file contradicted itself at the point a reader looks
+// first. Fixed in place rather than deleted -- the wrong version is named here so nobody
+// re-derives it from an old export. The live values are on the two lines below.
 var DDUE_FILLER_MIN_HR = 10.2;
 // v1.33: 15 -> 10.2. THIS CONSTANT AND DD_RETURN_MIN MOVE TOGETHER AND ONLY TOGETHER.
 // Same pairing discipline as PREDICTED_LAG_MIN / SPARK_ACCEPT_HR in v1.32, for the same reason:
@@ -1688,7 +2518,24 @@ var RETURN_FIXED_MIN = 4.9;
 // Spark model lands at 8.74 min on DD's 3.40 mean miles and the project has already established
 // it over-charges DD. Do NOT back-solve a per-mile shape from the mean either -- a fraction-of-est
 // form matches at the mean and diverges at both tails, which is not a shape this data supports.
-// 6.5 sits between the pooled (6.44) and clean (7.88) measured means, nearer pooled.
+// PROVENANCE CORRECTED 2026-08-04 (annotation only -- no executable change, see header).
+// 6.5 was fitted on a population that INCLUDED 2 DERIVED return legs. A derived leg is an
+// inference, not an observation, and this project's own rule excludes derived legs from any DD
+// return-term fit -- so the constant was fitted against the rule it is documented under. The
+// measured-only mean is 5.97. (The earlier "between pooled 6.44 and clean 7.88" note described
+// the contaminated fit and is retained here only so the error is visible rather than erased.)
+// NOT CORRECTED IN THIS BUILD, deliberately -- the analysis chat's call is to fold it into the
+// next refit rather than move a constant mid-window. Neither the bar nor the shape is affected:
+//   BAR: 10.2 unchanged. It was set to preserve an accept set, not derived from the term.
+//   SHAPE: flatness unchanged. The slope finding (-0.131 +/- 0.499, r = -0.042) does not depend
+//          on the two derived legs.
+// KNOWN RESIDUAL BIAS, quantified and CONSERVATIVE. 6.5 is 0.53 min too large, so every DD
+// committed denominator runs long and displayed DD net/hr comes out LOW. Measured across the
+// 1,104-offer filler space: 849 offers pass at 5.97 against 844 at 6.5, so the live build
+// declines 5 fillers a measured term would have taken -- 0.45% of the space. The net pay floor
+// is $0.09 too high at every est (the term is flat, so the bias is a constant). No offer changes
+// class under the 31.5 cap either way. The error direction is a tighter gate, never a looser
+// one, which is the safe direction to sit in while waiting for the refit.
 // Applies to the DD ACCEPT GATE only. It does NOT touch DD capture: a DD row's realized return
 // leg is still measured or derived per the v1.30/v1.31 rules, and ddWorkMin is unchanged, so no
 // Spark cycle can move. ===
@@ -1721,6 +2568,20 @@ var SPARK_ACCEPT_HR = 15.3; // net >= this $/hr on committed min (incl. return+l
 // BOUNDARY: fires on items STRICTLY GREATER than the cap -- 36 items is inside, 37 trips it.
 // This follows the getTimeBuffer bucket idiom (`items <= 25` is inside the bucket). If the
 // analysis chat meant >= 36, that is a one-character change on the comparison below.
+// v1.35 PENDING ROUTING FLOORS -- these are NOT gates. They decide whether the item count can
+// still change the verdict, i.e. whether it is worth a trip one level deeper into the Spark
+// offer. Nothing here decides whether a run is worth taking.
+// Measured (analysis chat, n=221 Spark offers with items recorded): 0 of 59 offers with raw est
+// under 30 min, and 0 of 10 with pay under $12, carried items above HIGH_ITEM_CAP. Under either
+// floor the look cannot flip anything, so the app takes the offer at face value instead.
+// Both are inclusive: est >= 30 and pay >= 12 pend.
+var PENDING_EST_MIN = 30;   // on RAW est, the same unit the driver reads off the offer card
+var PENDING_PAY_MIN = 12;
+// Items only exist on these platforms. Matches the stops/items rule already enforced in
+// saveEdit() -- a Pharmacy or Customer Return offer has no item screen to go look at.
+var ITEM_PLATFORMS = ['Spark Shop', 'Curbside', 'Shop+Pharmacy'];
+function hasItemCount(p) { return ITEM_PLATFORMS.indexOf(p) >= 0; }
+
 var HIGH_ITEM_CAP = 36;
 var SPARK_MARGINAL_HR = 13; // >= this (and < accept) -> MARGINAL band (was a flat $2 rule; now a committed-time gap: how far net/hr sits below the 16 gate, not raw dollars)
 // === v1.23 SLOW-BOARD FLAG (advisory only -- never auto-adjusts the gate). When recent idle is
@@ -1751,8 +2612,34 @@ var HISTORY_DAYS = 14;             // rolling rch_log_history retention
 // flight. Cap the bar: realistic concurrency is 1 Spark + 1 DD. Past this you've stopped
 // tapping and the run isn't recoverable from the bar anyway -- fix it in Edit. Overflow is
 // reported in the bar, never silently swallowed.
+// === v1.35 PENDING STATE ====================================================================
+// pendingIdx is the offerLog index of the row waiting on an item count; -1 when none is open.
+// pendingSig is that row's face-value signature. Resolution requires BOTH: the same open row
+// and the same face values. If any face value changed, the driver is looking at a different
+// offer, so the open row closes UNRESOLVED and a new row is written -- silently overwriting the
+// old row with new numbers would destroy an offer that really was seen and really was pended.
+// Deliberately NOT persisted: a pending is a live decision at the line, and a stale one
+// restored on next launch would put an OPEN row on screen for an offer long gone. The ROW
+// survives (it is in offerLog); only the live pointer is dropped, so it exports as OPEN.
+var pendingIdx = -1;
+var pendingSig = '';
+function faceSig(platform, pay, miles, estRaw, stops, readyAt, travelMi, fcfs) {
+  return [platform, pay, miles, estRaw, stops, readyAt || '', travelMi || 0, fcfs ? 1 : 0].join('|');
+}
+
 var MAX_INFLIGHT = 3;
 var gasSource = 'default -- no fillup';
+// v1.52: WHERE the live rate came from -- 'FILLUP' | 'MANUAL' | 'DEFAULT'. gasSource is a
+// human-readable label for the badge; this is the machine-readable origin, stamped onto every
+// row at capture. A measured receipt, a typed slider value and a shipped placeholder are three
+// different kinds of fact and must not share a cell.
+var gasOrigin = 'DEFAULT';
+// v1.54: when the manual rate was typed. Persisted, because staleness must survive a reload --
+// otherwise every app launch silently resets the clock on an ageing assertion.
+var manualSetAtMs = (function () {
+  try { var v = parseInt(localStorage.getItem('rch_manual_gas_at'), 10); return isFinite(v) ? v : null; }
+  catch (e) { return null; }
+})();
 var platform = 'Spark Shop';
 var hist = [];
 var fillups = [];
@@ -1806,10 +2693,22 @@ try { prevDate = localStorage.getItem('rch_log_prev_date') || ''; } catch(e) { p
 // Ending a block never destroys it; starting again appends a new one. Realized $/shift-hour
 // sums worked time across every block, so a split shift scores as one honest day.
 // NEVER auto-stamped -- see header note.
-var shift = { date: '', blocks: [] };
+// v1.35: `unlogged` counts offers that were SEEN and declined but never checked in the app --
+// the ones no export can otherwise know about. Split Spark / DD because the two boards have
+// different volumes and mixing them would make either one unreadable. Lives on the shift record
+// so it rides into the 14-day history with everything else about the day.
+var shift = { date: '', blocks: [], unlogged: { spark: 0, dd: 0 } };
 try {
   var _s = JSON.parse(localStorage.getItem('rch_shift') || 'null');
   if (_s && typeof _s === 'object') {
+    // Pre-v1.35 shift records have no `unlogged`. Absent is NOT zero -- a day logged before this
+    // build has no idea how many offers went unrecorded, and saying 0 would assert a completeness
+    // nobody measured. Left undefined, it exports blank and completeness reads UNKNOWN.
+    if (_s.unlogged && typeof _s.unlogged === 'object') {
+      shift.unlogged = { spark: _s.unlogged.spark || 0, dd: _s.unlogged.dd || 0 };
+    } else {
+      shift.unlogged = null;
+    }
     if (Array.isArray(_s.blocks)) {
       shift.date = _s.date || '';
       shift.blocks = _s.blocks;
@@ -1828,6 +2727,34 @@ var logHistory = [];
 try { logHistory = JSON.parse(localStorage.getItem('rch_log_history') || '[]'); } catch(e) { logHistory = []; }
 
 function saveShift() { try { localStorage.setItem('rch_shift', JSON.stringify(shift)); } catch(e) {} }
+
+// === v1.35 UNLOGGED DECLINES ================================================================
+// A tap counter, not an inference. The app cannot see an offer the driver never typed in, so
+// this is the only way an export can tell a thin BOARD (few offers came) from a thin LOG (many
+// came, few were recorded). Everything downstream that divides by offer count depends on
+// knowing which of those it is looking at.
+// First tap on a pre-v1.35 day starts the count at that tap, not at an assumed zero history.
+function bumpUnlogged(kind, delta) {
+  if (!shift.unlogged) shift.unlogged = { spark: 0, dd: 0 };
+  var k = (kind === 'dd') ? 'dd' : 'spark';
+  shift.unlogged[k] = Math.max(0, (shift.unlogged[k] || 0) + delta);
+  saveShift();
+  renderShiftBar();
+  renderExportSummary();
+}
+
+// FULL / PARTIAL / UNKNOWN. UNKNOWN is not a failure state -- it is the honest answer for a day
+// recorded before the counter existed, and for a day where nobody touched it either way.
+// PARTIAL is what a counter above zero means. FULL is the DEFAULT CLAIM on any v1.35 day: the
+// driver is told to tap when they skip an offer, so no taps reads as nothing skipped. That makes
+// FULL exactly as trustworthy as remembering to tap, and no more -- a forgotten tap exports as
+// FULL and looks identical to a genuinely complete day. The app verifies none of this. Treat
+// FULL as an assertion, PARTIAL as a measurement, UNKNOWN as a day from before the counter.
+function logCompleteness(snap) {
+  var u = snap && snap.unlogged;
+  if (!u) return 'UNKNOWN';
+  return ((u.spark || 0) + (u.dd || 0)) > 0 ? 'PARTIAL' : 'FULL';
+}
 function saveHistory() { try { localStorage.setItem('rch_log_history', JSON.stringify(logHistory)); } catch(e) {} }
 
 function hhmm(ms) {
@@ -1963,17 +2890,81 @@ function inShift(ms) {
   return false;
 }
 
-if (fillups.length > 0) {
-  gas = fillups[0].cpm;
-  gasSource = 'fillup ' + fillups[0].date;
+// === v1.36 LIVE FILLUP SELECTION ===========================================================
+// The live rate is the one bought most recently, NOT the one typed most recently. Everything
+// that reads a rate goes through liveFillup() -- there is deliberately no second path.
+// dayOf() normalizes to a local calendar day so two receipts on the same date compare equal and
+// fall through to the entry-stamp tiebreak.
+function dayOf(ms) { var d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); }
+// Returns the fuel day in ms, or null if the entry carries nothing to date it by.
+// EXPLICIT fuelDate wins. Otherwise the entry stamp stands in -- see fillupDateInferred().
+function fillupDay(f) {
+  if (!f) return null;
+  if (f.fuelDate) {
+    var p = String(f.fuelDate).split('-');
+    if (p.length === 3) {
+      var t = new Date(+p[0], +p[1] - 1, +p[2]).getTime();
+      if (!isNaN(t)) return t;
+    }
+  }
+  if (f.ts) return dayOf(f.ts);
+  return null;
+}
+// True when the date shown for this fillup was inferred from when it was TYPED rather than
+// recorded from when the fuel was bought. Surfaced in the history list as `~`, never hidden:
+// for a fillup entered at the pump the two coincide exactly, but the app cannot tell which.
+function fillupDateInferred(f) { return !!(f && !f.fuelDate); }
+function liveFillupIdx() {
+  var best = -1, bestDay = null, bestTs = -1;
+  for (var i = 0; i < fillups.length; i++) {
+    var d = fillupDay(fillups[i]);
+    if (d == null) continue;
+    var t = fillups[i].ts || 0;
+    if (bestDay == null || d > bestDay || (d === bestDay && t > bestTs)) { best = i; bestDay = d; bestTs = t; }
+  }
+  // Nothing in the list can be dated at all (pre-v1.25 entries only). Fall back to entry order --
+  // the old behavior -- rather than refusing to price an offer. The badge still shows the source.
+  if (best < 0 && fillups.length) best = 0;
+  return best;
+}
+function liveFillup() { var i = liveFillupIdx(); return i >= 0 ? fillups[i] : null; }
+// Single place that pushes the live fillup into the rate the rest of the app reads.
+function applyLiveFillup() {
+  var f = liveFillup();
+  if (!f) return false;
+  gas = f.cpm;
+  gasOrigin = 'FILLUP';   // v1.52: ppg * gal / mi off a logged receipt -- a measurement
+  gasSource = 'fillup ' + (f.fuelDate ? fuelDateLabel(f.fuelDate) : f.date);
   gasIsDefault = false;
+  return true;
+}
+function fuelDateLabel(iso) {
+  var p = String(iso).split('-');
+  if (p.length !== 3) return String(iso);
+  return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function todayIso() {
+  var d = new Date(), m = d.getMonth() + 1, dd = d.getDate();
+  return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (dd < 10 ? '0' : '') + dd;
+}
+
+if (fillups.length > 0) {
+  applyLiveFillup();
 }
 
 // Age of the newest fillup in days, or null if unknown. Entries logged before v1.25 have no
 // timestamp -- unknown age is NOT treated as stale, since guessing old would be its own bug.
 function gasStaleDays() {
-  if (!fillups.length || !fillups[0].ts) return null;
-  return Math.floor((Date.now() - fillups[0].ts) / 86400000);
+  // v1.36: age runs from the day the fuel was BOUGHT, not the day the receipt was typed. A
+  // receipt entered three days late used to reset this clock to zero and hide a rate that was
+  // already stale. Undatable entries return null -- unknown age, not zero age.
+  var f = liveFillup();
+  var d = fillupDay(f);
+  // v1.54: with no fillup logged, fall back to when the MANUAL rate was set. Previously this
+  // returned null and gasWarning() went quiet forever -- see the header.
+  if (d == null && gasOrigin === 'MANUAL' && manualSetAtMs) d = dayOf(manualSetAtMs);
+  if (d == null) return null;
+  return Math.max(0, Math.floor((dayOf(Date.now()) - d) / 86400000));
 }
 // One place that decides whether the rate on screen can be trusted, so the badge, the check
 // screen and the export cannot disagree about it.
@@ -1983,7 +2974,11 @@ function gasWarning() {
   }
   var d = gasStaleDays();
   if (d != null && d >= GAS_STALE_DAYS) {
-    return { level: 'warn', text: 'fillup is ' + d + ' days old -- rate may have moved' };
+    // v1.54: name WHICH kind of rate aged. A stale typed number and a stale receipt call for
+    // different actions -- one wants a new reading, the other wants a receipt logged at all.
+    return { level: 'warn', text: (gasOrigin === 'MANUAL' && !liveFillup())
+      ? 'typed rate is ' + d + ' days old -- log a fillup'
+      : 'fillup is ' + d + ' days old -- rate may have moved' };
   }
   return null;
 }
@@ -2100,6 +3095,24 @@ function updateFuPreview() {
 }
 
 function saveFillup() {
+  // === v1.35 RECORD -- the 08/01 fillup re-entry is WITHDRAWN. No code change, none needed. ===
+  // The blocking question was whether the gas log's Miles column runs forward or backward. It is
+  // FORWARD: a row's miles are the miles driven AFTER that fillup. Settled three ways by the
+  // analysis chat -- the last 2026 row is blank (impossible under backward), the log's own
+  // Pending note says miles are not known until the next fillup, and the driver's account of
+  // filling on 08/04 and then driving 240. So 219.8 belongs to the 08/01 -> 08/04 interval and
+  // was NOT knowable on 08/01.
+  // THE APP WAS NOT WRONG. saveFillup() charges cpm = ppg * gal / mi on the miles in the box at
+  // entry time, which on 08/01 was 187.7 -- the only mileage that existed yet. 64.92 / 187.7 =
+  // 0.34587, which is the 0.3459 the app has been charging. The log's 0.29536 is 64.92 / 219.8.
+  // Same receipt, different pairing: the tank ENDING 08/01 (12.19 MPG) versus the tank STARTING
+  // 08/01 (14.22). Not a row slip, and the earlier "231 of 9,295 offers wrongly declined" figure
+  // was conditional on a premise that did not hold. Nothing to re-enter, nothing to fix.
+  // CLOSED IN v1.36, and unrelated to the above: `gas` used to read fillups[0].cpm while this
+  // function used unshift, so fillups were ordered BY ENTRY, not by date, and a late-entered
+  // older receipt silently became the live rate. The rate is now chosen by liveFillup() on FUEL
+  // DATE, and this function no longer assigns `gas` at all. The old claim is left visible here
+  // rather than deleted so the fix is traceable from the place the bug lived.
   var ppg = parseFloat(document.getElementById('fuPPG').value);
   var gal = parseFloat(document.getElementById('fuGal').value);
   var mi  = parseFloat(document.getElementById('fuMi').value);
@@ -2114,19 +3127,39 @@ function saveFillup() {
 
   // v1.25: ts added so fillup age is knowable. `date` is a display string with no year and
   // cannot be compared. Pre-v1.25 entries have no ts and are simply treated as unknown age.
-  var entry = { ppg: ppg, gal: gal, mi: mi, totalCost: totalCost, cpm: cpm, mpg: mpg, date: dateStr, time: timeStr, ts: Date.now() };
+  // v1.36: when the fuel was BOUGHT. Defaults to today, so the normal case is unchanged and
+  // needs no tap; edited only when catching up an older receipt.
+  var fuelDate = document.getElementById('fuDate').value || todayIso();
+  // A future date would take over the live rate and hold it against every later receipt, so it
+  // is rejected at the door. Inline, with the reason -- rejected input explains itself.
+  if (fillupDay({ fuelDate: fuelDate }) > dayOf(Date.now())) {
+    fuNote('Fuel date is in the future -- nothing saved. Fix the date and save again.', 'var(--red)');
+    return;
+  }
+
+  var entry = { ppg: ppg, gal: gal, mi: mi, totalCost: totalCost, cpm: cpm, mpg: mpg, date: dateStr, time: timeStr, ts: Date.now(), fuelDate: fuelDate };
   fillups.unshift(entry);
   if (fillups.length > 20) fillups = fillups.slice(0, 20);
   try { localStorage.setItem('rch_fillups', JSON.stringify(fillups)); } catch(e) {}
 
-  gas = cpm;
-  gasSource = 'fillup ' + dateStr;
-  gasIsDefault = false;
+  // v1.36: THE RATE IS NOT FORCED BY SAVING. It is recomputed from whichever receipt is newest
+  // BY FUEL DATE. Logging an older receipt to catch up the record no longer moves the number
+  // every offer is judged against -- and the panel says so instead of changing it silently.
+  applyLiveFillup();
+  var live = liveFillup();
+  if (live !== entry) {
+    fuNote('Saved. Live rate stays $' + gas.toFixed(4) + '/mi from the '
+           + (live.fuelDate ? fuelDateLabel(live.fuelDate) : live.date)
+           + ' fillup -- that one is newer.', 'var(--amber)');
+  } else {
+    fuNote('Saved. Live rate is now $' + gas.toFixed(4) + '/mi.', 'var(--muted)');
+  }
   syncGasBadge();
 
   document.getElementById('fuPPG').value = '';
   document.getElementById('fuGal').value = '';
   document.getElementById('fuMi').value = '';
+  document.getElementById('fuDate').value = todayIso();
   document.getElementById('fuCalcVal').textContent = '--';
   document.getElementById('fuCalcSub').textContent = 'enter all 3 fields above';
   document.getElementById('fuSaveBtn').disabled = true;
@@ -2139,6 +3172,14 @@ function saveFillup() {
   renderFuHistory();
 }
 
+// v1.36: the fillup panel talks back in place. No native dialog on a tap path.
+function fuNote(msg, color) {
+  var el = document.getElementById('fuNote');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = color || 'var(--muted)';
+}
+
 function renderFuHistory() {
   var el = document.getElementById('fuHistList');
   if (!fillups.length) {
@@ -2146,10 +3187,27 @@ function renderFuHistory() {
     return;
   }
   var html = '';
-  fillups.forEach(function(f, i) {
+  // v1.36: ACTIVE marks the fillup that is actually setting the rate -- which is no longer
+  // necessarily the top of the list. Order is by FUEL DATE so the list reads the way the tank
+  // history actually happened, not the order the receipts were typed.
+  var liveIdx = liveFillupIdx();
+  var order = fillups.map(function(f, i) { return i; }).sort(function(x, y) {
+    var dx = fillupDay(fillups[x]), dy = fillupDay(fillups[y]);
+    if (dx == null && dy == null) return x - y;
+    if (dx == null) return 1;
+    if (dy == null) return -1;
+    if (dy !== dx) return dy - dx;
+    return (fillups[y].ts || 0) - (fillups[x].ts || 0);
+  });
+  order.forEach(function(i) {
+    var f = fillups[i];
+    // `~` = date inferred from when the receipt was TYPED, because this entry predates the fuel
+    // date field. Shown, never hidden: it is exact for a fillup entered at the pump and wrong in
+    // one known direction otherwise.
+    var dLabel = f.fuelDate ? fuelDateLabel(f.fuelDate) : (f.date + ' ~');
     html += '<div class="fu-hist-item">' +
       '<div>' +
-        '<div class="fu-hi-date">' + f.date + ' at ' + f.time + (i === 0 ? ' &nbsp;<span style="color:var(--green);font-size:10px;">ACTIVE</span>' : '') + '</div>' +
+        '<div class="fu-hi-date">' + dLabel + ' at ' + f.time + (i === liveIdx ? ' &nbsp;<span style="color:var(--green);font-size:10px;">ACTIVE</span>' : '') + '</div>' +
         '<div class="fu-hi-detail">$' + f.ppg.toFixed(3) + '/gal &middot; ' + f.gal.toFixed(2) + ' gal &middot; ' + f.mi.toFixed(0) + ' mi &middot; ' + f.mpg.toFixed(1) + ' mpg</div>' +
       '</div>' +
       '<div class="fu-hi-cpm">$' + f.cpm.toFixed(4) + '<span>/mi</span></div>' +
@@ -2160,8 +3218,10 @@ function renderFuHistory() {
 
 function clearFillups() {
   fillups = [];
+  fuNote('');
   try { localStorage.removeItem('rch_fillups'); } catch(e) {}
   gas = GAS_SHIPPED_DEFAULT;
+  gasOrigin = 'DEFAULT';   // v1.52: shipped placeholder, not an observation
   gasSource = 'default -- no fillup';
   gasIsDefault = true;   // back to the shipped constant, and the badge now says so
   syncGasBadge();
@@ -2170,8 +3230,14 @@ function clearFillups() {
 
 function manualGas(v) {
   gas = parseFloat(v);
+  gasOrigin = 'MANUAL';   // v1.52: an assertion, not a measurement. Quantized to 0.001 by the slider.
   gasSource = 'manual';
   gasIsDefault = false;   // the driver typed a number; that is an input, not a fallback
+  // v1.54: ...but an assertion has a shelf life. Before this, clearing gasIsDefault with no
+  // fillup logged made gasWarning() return null permanently -- a July rate priced August offers
+  // in silence. Stamped so the same GAS_STALE_DAYS applies to a typed rate as to a receipt.
+  manualSetAtMs = Date.now();
+  try { localStorage.setItem('rch_manual_gas_at', String(manualSetAtMs)); } catch(e) {}
   document.getElementById('gasSliderVal').textContent = '$' + gas.toFixed(3);
   syncGasBadge();
 }
@@ -2575,6 +3641,14 @@ function computeRealized(log, useShift) {
     if (log[i] && log[i].accepted && log[i].startedAt) allStarts.push(log[i].startedAt);
   }
   allStarts.sort(function(a, b) { return a - b; });
+  // v1.40: every accept stamp in the log, for RETROACTIVE detection of auto-closed returns.
+  // The auto-close writes backAt = the next row's acceptedAtMs, to the millisecond. Two human
+  // taps never land on another row's accept stamp exactly, so exact equality is a reliable
+  // fingerprint -- it reclassifies pre-v1.40 history without re-entry and without guessing.
+  var acceptStamps = {};
+  for (i = 0; i < log.length; i++) {
+    if (log[i] && log[i].acceptedAtMs) acceptStamps[log[i].acceptedAtMs] = true;
+  }
   function nextStartAfter(ms) {
     for (var k = 0; k < allStarts.length; k++) if (allStarts[k] > ms) return allStarts[k];
     return null;
@@ -2584,6 +3658,10 @@ function computeRealized(log, useShift) {
     e.cycleMin = null; e.realHr = null; e.runMin = null; e.returnMin = null; e.idleMin = null; e.lagMin = null;
     e.cycleBreakMin = null; e.cycleOverlapMin = null; e.cycleDropMin = null; e.cycleDropNew = false;
     e.cycleNote = null; e.returnDerived = false;
+    // v1.40: recomputed every pass, like returnDerived. Stored `backInferred` wins; otherwise
+    // fall back to the exact-stamp fingerprint so legacy rows classify themselves.
+    e.backFromAccept = !!(e.backAt && e.returnKind === 'N'
+                          && (e.backInferred || (acceptStamps[e.backAt] && e.backAt !== e.acceptedAtMs)));
     if (!e.accepted || !e.acceptedAtMs) {
       // v1.26: a hand-logged row that was never accepted through the app has no accept stamp,
       // so it can never have a cycle. Say so rather than leaving a blank to be investigated.
@@ -2599,7 +3677,10 @@ function computeRealized(log, useShift) {
         e.runMin = minBetween(runFrom, e.deliveredAt);
         ddWorkMin += e.runMin;
         var ddNote = 'DD-OCCUPIED';
-        if (e.backAt && e.backAt > e.deliveredAt) {
+        // v1.39: `>=` when the Delivered stamp was NOT inferred, so a genuine zero-length return
+        // is measured as 0 instead of vanishing. Still strict `>` on an inferred stamp -- see the
+        // header: that pair is fabricated by tapBack() and nothing was observed.
+        if (e.backAt && (deliveredFabricated(e) ? (e.backAt > e.deliveredAt) : (e.backAt >= e.deliveredAt))) {
           // v1.31: REVERTED to strict `>`. v1.30 made this `>=` to capture a "measured zero",
           // on the premise that Back-at-the-drop was being written blank. That premise was
           // wrong, and the change was actively harmful:
@@ -2663,7 +3744,11 @@ function computeRealized(log, useShift) {
     e = runs[i];
     var rf = e.startedAt || e.acceptedAtMs;
     if (e.deliveredAt && e.deliveredAt > rf) e.runMin = minBetween(rf, e.deliveredAt);
-    if (e.backAt && e.deliveredAt && e.backAt > e.deliveredAt) e.returnMin = minBetween(e.deliveredAt, e.backAt);
+    // v1.39: same rule as the DD branch -- equality is a measured 0 unless Delivered was inferred.
+    if (e.backAt && e.deliveredAt
+        && (deliveredFabricated(e) ? (e.backAt > e.deliveredAt) : (e.backAt >= e.deliveredAt))) {
+      e.returnMin = minBetween(e.deliveredAt, e.backAt);
+    }
     var nxt = runs[i + 1];
     // === v1.26: CLOSE THE CYCLE AT SHIFT STOP ================================
     // The cycle used to need a NEXT ACCEPT to exist, so the last run of every day scored
@@ -2871,7 +3956,8 @@ function toggleShift() {
   var bl = curBlock();
   if (!bl) {
     // Start a block. First of the day, or a new stretch after a gap -- both just append.
-    if (shift.date !== todayKey()) { shift.date = todayKey(); shift.blocks = []; }
+    // v1.35: a new day starts a fresh unlogged count -- never carry yesterday's forward.
+    if (shift.date !== todayKey()) { shift.date = todayKey(); shift.blocks = []; shift.unlogged = { spark: 0, dd: 0 }; }
     shift.blocks.push({ start: now, stop: null, breaks: [] });
     clearShiftPending();
   } else {
@@ -3283,8 +4369,19 @@ function tapDelivered(i) {
 // Tapping either closes the run: it leaves the bar and the return leg is now on record.
 function tapBack(i, kind) {
   var e = offerLog[i];
-  if (!e.deliveredAt) e.deliveredAt = Date.now();   // missed Delivered tap: at least capture the pair
-  e.backAt = Date.now();
+  // v1.45: ONE clock reading for both stamps. This used to be two Date.now() calls, which
+  // occasionally straddled a millisecond boundary and left the fabricated pair 1 ms apart --
+  // enough to read as a real sub-millisecond return leg on a row with no provenance marker.
+  // Identical by construction now, which is what every provenance rule below already assumed.
+  var nowMs = Date.now();
+  if (!e.deliveredAt) {
+    e.deliveredAt = nowMs;        // missed Delivered tap: at least capture the pair
+    // v1.39: MARK THE FABRICATION. This stamp was invented, not observed, and backAt lands on the
+    // same millisecond. Without this flag that pair is indistinguishable from a genuine
+    // zero-length return, which is what forced the strict `>` in v1.31.
+    e.deliveredInferred = true;
+  }
+  e.backAt = nowMs;
   e.returnKind = kind;
   // v1.24: a real Back tap, as opposed to a dismiss or a shift-end.
   // v1.32, asked and answered: yes, Close Reason DUPLICATING Return Kind here is intended. On a
@@ -3343,6 +4440,15 @@ function renderShiftBar() {
   rEl.className = 'pace-stat-val';
   rEl.style.color = r.shiftRealHr == null ? 'var(--muted)'
     : (r.shiftRealHr >= SPARK_ACCEPT_HR ? 'var(--green)' : r.shiftRealHr >= SPARK_MARGINAL_HR ? 'var(--amber)' : 'var(--red)');
+  // v1.35 unlogged declines. A pre-v1.35 shift record has no counter at all -- show '--', not 0,
+  // so an unmeasured day never looks like a measured zero.
+  var u = shift.unlogged;
+  document.getElementById('unSpark').textContent = u ? (u.spark || 0) : '--';
+  document.getElementById('unDD').textContent    = u ? (u.dd || 0) : '--';
+  var comp = logCompleteness(shift);
+  var unEl = document.getElementById('unState');
+  unEl.textContent = comp === 'FULL' ? 'log: full' : comp === 'PARTIAL' ? 'log: partial' : 'log: unknown';
+  unEl.style.color = comp === 'PARTIAL' ? 'var(--amber)' : 'var(--muted)';
   document.getElementById('shWorked').textContent = r.workedMin > 0 ? (r.workedMin / 60).toFixed(1) + 'h' : '--';
   document.getElementById('shBreak').textContent  = Math.round(r.breakMin) + 'm';
   document.getElementById('shDD').textContent     = Math.round(r.ddWorkMin) + 'm';
@@ -3451,18 +4557,32 @@ function renderLog() {
     var vcls = e.verdict === 'ACCEPT' ? 'le-accept' : e.verdict === 'FILLER' ? 'le-filler' : e.verdict === 'MARGINAL' ? 'le-marginal' : 'le-decline';
     var entryCls = 'log-entry' + (e.accepted ? ' accepted' : '') + (e.fcfs ? ' fcfs' : '');
     var fcfsBadge = e.fcfs ? ' &nbsp;<span style="color:var(--amber);font-size:9px;font-weight:bold;">FCFS</span>' : '';
+    // v1.43: taken while something else was still running. Shown in the log while the day can
+    // still be fixed, not only in the export a week later.
+    fcfsBadge += e.stackedOn ? ' &nbsp;<span style="color:var(--purple);font-size:9px;font-weight:bold;">STACKED ON ' + e.stackedOn.toUpperCase() + '</span>' : '';
     var threshold = (!e.accepted && e.acceptAt) ? '<div class="log-entry-threshold">accepts at $' + e.acceptAt.toFixed(2) + '+</div>' : '';
     var btnTxt = e.accepted ? '+ ACCEPTED' : 'Mark Accepted';
     var btnCls = 'log-accept-btn' + (e.accepted ? ' on' : '');
     // Decline-reason row: only on unaccepted ACCEPT/FILLER entries
     var reasonRow = '';
-    if (!e.accepted && (e.verdict === 'ACCEPT' || e.verdict === 'FILLER')) {
+    // v1.37: two different questions, decided by whether this run was ever the driver's.
+    //   never accepted  -> "passed -- why?", the six pass reasons, no `canceled` (it cannot be
+    //                      true: a run you never took cannot have been canceled)
+    //   was accepted    -> "was accepted -- what happened?", `canceled` first, pass reasons kept
+    //                      because a cancel can still have a cause worth recording
+    // PENDING is included now: a hand-accepted pending that then cancels had no chip row at all.
+    var chipEligible = (e.verdict === 'ACCEPT' || e.verdict === 'FILLER' || e.verdict === 'PENDING'
+                        || e.everAccepted);
+    if (!e.accepted && chipEligible) {
       var reasons = ['location','food type','too many items','time','economics','other'];
+      if (e.everAccepted) reasons = ['canceled'].concat(reasons);
       var chips = reasons.map(function(r) {
         var on = (e.declineReason === r) ? ' on' : '';
-        return '<button class="reason-chip' + on + '" onclick="setReason(' + idx + ',\'' + r + '\')">' + r + '</button>';
+        var cls = 'reason-chip' + on + (r === 'canceled' ? ' cancel' : '');
+        return '<button class="' + cls + '" onclick="setReason(' + idx + ',\'' + r + '\')">' + r + '</button>';
       }).join('');
-      reasonRow = '<div class="reason-row"><div class="reason-label">passed -- why?</div><div class="reason-chips">' + chips + '</div></div>';
+      var label = e.everAccepted ? 'was accepted -- what happened?' : 'passed -- why?';
+      reasonRow = '<div class="reason-row"><div class="reason-label">' + label + '</div><div class="reason-chips">' + chips + '</div></div>';
     }
     html += '<div class="' + entryCls + '">' +
       '<div class="log-entry-top">' +
@@ -3513,6 +4633,9 @@ function renderPrevLog() {
     var vcls = e.verdict === 'ACCEPT' ? 'le-accept' : e.verdict === 'FILLER' ? 'le-filler' : e.verdict === 'MARGINAL' ? 'le-marginal' : 'le-decline';
     var entryCls = 'log-entry' + (e.accepted ? ' accepted' : '') + (e.fcfs ? ' fcfs' : '');
     var fcfsBadge = e.fcfs ? ' &nbsp;<span style="color:var(--amber);font-size:9px;font-weight:bold;">FCFS</span>' : '';
+    // v1.43: taken while something else was still running. Shown in the log while the day can
+    // still be fixed, not only in the export a week later.
+    fcfsBadge += e.stackedOn ? ' &nbsp;<span style="color:var(--purple);font-size:9px;font-weight:bold;">STACKED ON ' + e.stackedOn.toUpperCase() + '</span>' : '';
     var threshold = (!e.accepted && e.acceptAt) ? '<div class="log-entry-threshold">accepts at $' + e.acceptAt.toFixed(2) + '+</div>' : '';
     html += '<div class="' + entryCls + '">' +
       '<div class="log-entry-top">' +
@@ -3536,6 +4659,16 @@ function toggleAccept(i) {
   offerLog[i].accepted = !offerLog[i].accepted;
   // If now accepted, clear any decline reason (you took it)
   if (offerLog[i].accepted) offerLog[i].declineReason = '';
+  if (offerLog[i].accepted) offerLog[i].everAccepted = true;   // v1.37, never cleared
+  // v1.35: taking a pending by hand (offer about to expire, no time for the look) is a real and
+  // legitimate move. The row closes UNRESOLVED -- it pended and never got its items -- and the
+  // verdict stays PENDING, because that IS what the app decided. It is not retroactively an
+  // ACCEPT the app never issued.
+  if (offerLog[i].pendingState === 'OPEN' && offerLog[i].accepted) {
+    offerLog[i].pendingState = 'UNRESOLVED';
+    if (pendingIdx === i) { pendingIdx = -1; pendingSig = ''; }
+    applyPendingUI();
+  }
   // Un-accepting KEEPS any stamps -- never destroy data on a toggle. The run just leaves the
   // bar; toggle it back and it returns at whatever step it was on.
   saveOfferLog();
@@ -3782,6 +4915,33 @@ function renderExportSummary() {
   // if the box has been overridden to something else, the export would quietly carry two
   // different denominators. Say so instead of hiding it.
   renderPastBreaks();
+
+  // v1.38: report timing coverage where the driver can still act on it. computeRealized() is
+  // what populates the legs, so run it on a copy of the active log first -- reading the flag off
+  // un-computed rows would report every row as partial.
+  var mcNote = document.getElementById('minsCompleteNote');
+  if (mcNote) {
+    try {
+      computeRealized(src, true);
+      var acc   = src.filter(function(e) { return e.accepted; }).length;
+      // v1.39: split by whether the driver can actually DO anything about it. Telling someone to
+      // make a tap that cannot exist is worse than saying nothing -- it sends them looking for a
+      // mistake they did not make.
+      var tapShort   = src.filter(function(e) { return minutesGapKind(e) === 'TAP'; }).length;
+      var stampShort = src.filter(function(e) { return minutesGapKind(e) === 'STAMP'; }).length;
+      var msg = '';
+      if (tapShort > 0) {
+        msg = tapShort + ' of ' + acc + ' accepted rows are missing a Started, Delivered or Back tap';
+      }
+      if (stampShort > 0) {
+        msg += (msg ? ' -- ' : '') + stampShort + ' row' + (stampShort > 1 ? 's have' : ' has')
+             + ' no lag (accept stamp, not a missed tap -- nothing to fix)';
+      }
+      mcNote.textContent = msg;
+      mcNote.style.color = tapShort > 0 ? 'var(--amber)' : (stampShort > 0 ? 'var(--muted)' : '');
+    } catch (x) { mcNote.textContent = ''; }
+  }
+
   var note = document.getElementById('hrsStampNote');
   if (note) {
     if (auto !== '' && Math.abs(hrs - parseFloat(auto)) >= 0.05) {
@@ -3823,6 +4983,112 @@ function resetHoursToStamps() {
 
 // Builds one day's CSV block. Shared by the single-day export and the rolling archive so the
 // two can never drift apart. shiftSnap = that day's shift record, or null if unknown.
+// === v1.38 =================================================================================
+// Does this row's Lag/Run/Return triple stand on its own? Call AFTER computeRealized().
+// Blank on a row that was never accepted -- no triple is expected there, so "incomplete" would
+// be a false alarm. DERIVED is kept separate from YES on purpose: a derived return leg closes
+// the arithmetic but is not an observation, and folding it into YES would let it into fits that
+// are supposed to exclude it.
+// v1.39: WHICH KIND of gap, so the app does not tell the driver to make a tap that does not
+// exist. Two remediable shapes (a missed Started/Delivered/Back tap) and one that is not: when
+// startedAt <= acceptedAtMs there is no lag to compute and no tap that would create one. The run
+// itself is correct on such a row and the row reconciles -- it is incomplete, not wrong.
+// Returns 'NONE' | 'TAP' | 'STAMP'.
+// === v1.41: is this row's Delivered stamp a fabrication? ====================================
+// Three states, not two. v1.39 tested a boolean and let `undefined` fall through to the
+// permissive branch, silently promoting every legacy equal-stamp row -- fabricated ones included.
+//   marked true                     -> fabricated (tapBack invented it). BLANK.
+//   equal stamps, NOT minute-aligned -> fabricated: only tapBack's two Date.now() calls land in
+//                                      one millisecond, and hitting :00.000 by chance is ~1/60000.
+//   equal stamps, minute-aligned     -> the edit-flattening signature. Two real taps inside one
+//                                      minute. A MEASURED 0.
+// === v1.51: the rate a row was scored at ===================================================
+// Stored from v1.51 on. For an older row, invert the charging model -- gasCost = pay - net and
+// gasCost = cpm * (2*miles + travelMiles), so cpm = (pay - net) / (2*miles + travelMiles). Exact,
+// because pay/net/miles/travelMiles are all held at full precision on the row. Recovers a
+// mid-shift rate change correctly, which is the case that matters.
+function effectiveGasCpm(e) {
+  if (!e) return null;
+  if (typeof e.gasCpm === 'number' && isFinite(e.gasCpm)) return e.gasCpm;
+  var chargeableMiles = (2 * (e.miles || 0)) + (e.travelMiles || 0);
+  if (chargeableMiles <= 0) return null;             // nothing was charged; rate unrecoverable
+  if (typeof e.pay !== 'number' || typeof e.net !== 'number') return null;
+  return (e.pay - e.net) / chargeableMiles;
+}
+// v1.52: reports the ORIGIN, not merely that a value exists. v1.51 returned 'STORED' for a
+// measured fillup, a typed slider value and a shipped default alike -- three different kinds of
+// fact in one cell, which is the mistake this project keeps having to undo.
+function gasCpmSource(e) {
+  if (!e) return '';
+  if (typeof e.gasCpm === 'number' && isFinite(e.gasCpm)) {
+    // A v1.51 row stored the rate but not its origin. Do not claim to know where it came from.
+    return e.gasOrigin || 'STORED';
+  }
+  // Inverted from the row's own arithmetic. The VALUE is exact; the ORIGIN is unrecoverable --
+  // the inversion cannot distinguish a fillup from a slider entry.
+  return effectiveGasCpm(e) == null ? '' : 'DERIVED';
+}
+
+// v1.42: 'MEASURED' | 'FABRICATED' | 'AMBIGUOUS' | 'NA'.
+// NA means there is no equal pair to adjudicate -- the ordinary case, decided on the stamps.
+function deliveredProvenance(e) {
+  if (!e) return 'NA';
+  if (e.deliveredInferred === true) return 'FABRICATED';
+  if (e.deliveredInferred === false) return 'MEASURED';   // driver vouched, or changed the value
+  if (!e.deliveredAt || !e.backAt) return 'NA';
+  if (e.backAt !== e.deliveredAt) return 'NA';            // not an equal pair
+  if (e.rowVer >= 142) {
+    // Decisive, no heuristic: nothing in the app writes two identical stamps except tapBack's
+    // two Date.now() calls, and only an edit can move stamps onto a minute boundary.
+    if (!e.editedAt) return 'FABRICATED';
+    // Edited: flattened real taps and a laundered fabrication are indistinguishable from the
+    // stamps alone. Do not guess -- leave it blank and let the driver vouch.
+    return 'AMBIGUOUS';
+  }
+  // Legacy rows carry no edit history. v1.41 heuristic, bounded at zero cost on the 08/10 file.
+  return (e.deliveredAt % 60000 !== 0) ? 'FABRICATED' : 'MEASURED';
+}
+// A leg is only measured on a MEASURED/NA row. AMBIGUOUS is treated like FABRICATED for the
+// arithmetic -- blank, not zero -- because promoting it is exactly the laundering step.
+function deliveredFabricated(e) {
+  var p = deliveredProvenance(e);
+  return p === 'FABRICATED' || p === 'AMBIGUOUS';
+}
+
+// v1.41: where the return leg's endpoint came from. Exported so a tapped N and an auto-closed N
+// can never pool -- they measure different quantities (9.58 vs 3.40 min on DD).
+function returnSource(e) {
+  if (!e || e.returnMin == null) return '';
+  if (e.returnDerived) return 'DERIVED';
+  if (e.backFromAccept) return 'AUTO-CLOSE';
+  return 'TAP';
+}
+
+function minutesGapKind(e) {
+  if (!e || !e.accepted) return 'NONE';
+  if (minutesCompleteFlag(e) !== 'NO') return 'NONE';
+  var lagUnfixable = (e.lagMin == null && e.startedAt && e.acceptedAtMs && e.startedAt <= e.acceptedAtMs);
+  if (lagUnfixable && e.runMin != null && e.returnMin != null) return 'STAMP';
+  return 'TAP';
+}
+
+// v1.42: edits can land days after the run, so an HH:MM stamp would be ambiguous. Date included.
+function stampToDateTime(ms) {
+  if (!ms) return '';
+  var d = new Date(ms);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-'
+       + String(d.getDate()).padStart(2, '0') + ' ' + msToClock(ms);
+}
+
+function minutesCompleteFlag(e) {
+  if (!e || !e.accepted) return '';
+  var whole = (e.lagMin != null && e.runMin != null && e.returnMin != null);
+  if (!whole) return 'NO';
+  // v1.40: an auto-closed N is inferred too -- its endpoint is another row's accept stamp, not a
+  // tap. Same exclusion logic as a derived DD return leg.
+  return (e.returnDerived || e.backFromAccept) ? 'DERIVED' : 'YES';
+}
+
 function buildCsvFor(src, dateStr, shiftSnap, hrs) {
   hrs = (hrs == null) ? '' : hrs;
   // RFC-4180 cell escaping. ROOT FIX for the merged-rows bug:
@@ -3843,7 +5109,11 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
   var fareSum     = src.reduce(function(s, e) { return s + (e.accepted ? (parseFloat(e.actualFare) || 0) : 0); }, 0);
   var tipSum      = src.reduce(function(s, e) { return s + (e.accepted ? (parseFloat(e.actualTip)  || 0) : 0); }, 0);
   var cashTips    = src.reduce(function(s, e) { return s + (e.accepted ? (parseFloat(e.cashTip)    || 0) : 0); }, 0);
-  // Earned: actual total (fare+tip+cash) where money was entered, else offered pay.
+  // Earned: actual total (fare+tip+cash) where money was entered, ELSE OFFERED PAY.
+  // v1.48: that fallback makes this a MIXED-BASIS column. On a row with no actuals, Earned is
+  // Accepted Pay copied across and is not a measurement. `Rows Money Logged` below discloses how
+  // many rows are on which basis -- compare it against `Accepted`. The fallback is deliberate
+  // (it keeps the pace display useful); the silence about it was the defect.
   var earnedSum   = src.reduce(function(s, e) {
     if (!e.accepted) return s;
     var money = (parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0);
@@ -3865,12 +5135,81 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
   var shBreak = shiftSnap ? Math.round(R.breakMin) : '';
   var shDD    = shiftSnap ? Math.round(R.ddWorkMin) : '';
   var shReal  = (shiftSnap && R.shiftRealHr != null) ? R.shiftRealHr.toFixed(2) : '';
+  // v1.35: read the counters off the SNAPSHOT, not the live shift -- exporting a previous day
+  // must report that day's counts. A day with no snapshot, or one recorded before v1.35, has no
+  // counter and emits blank rather than a zero it never measured.
+  var _u = (shiftSnap && shiftSnap.unlogged) ? shiftSnap.unlogged : null;
+  var unSpark = _u ? (_u.spark || 0) : '';
+  var unDD    = _u ? (_u.dd || 0) : '';
+  var pendOpen = src.filter(function(e) { return e.pendingState === 'OPEN'; }).length;
+  // v1.38: coverage of the timing triple, declared by the export itself. `Partial` is the count
+  // that must be excluded before any per-leg total is trusted.
+  var mcWhole = 0, mcDerived = 0, mcPartial = 0, mcSnapped = 0, mcAmbiguous = 0, mcStacked = 0, mcStraddle = 0, mcMoney = 0, mcNonFillup = 0;
+  src.forEach(function(e) {
+    var f = minutesCompleteFlag(e);
+    if (f === 'YES') mcWhole++; else if (f === 'DERIVED') mcDerived++; else if (f === 'NO') mcPartial++;
+    // v1.40: the analysis chat cannot bound edit-flattening from the CSV -- every stamp column is
+    // truncated to the minute on export, edited or not. In-app the signature survives: a row that
+    // went through the old flattening edit path has all three stamps landing exactly on a minute
+    // boundary. Counted here because this is the only place the sub-minute detail still exists.
+    if (e.startedAt && e.deliveredAt && e.backAt
+        && e.startedAt % 60000 === 0 && e.deliveredAt % 60000 === 0 && e.backAt % 60000 === 0) mcSnapped++;
+    if (deliveredProvenance(e) === 'AMBIGUOUS') mcAmbiguous++;   // v1.42
+    if (e.stackedCount > 0) mcStacked++;                          // v1.43
+    // v1.46: a return leg above 0 but under a millisecond. No human taps twice that fast, so on a
+    // legacy row this is a tapBack fabrication whose two clock reads straddled a boundary.
+    if (e.returnMin != null && e.returnMin > 0 && e.returnMin < 0.001) mcStraddle++;
+    // v1.48: accepted rows where Earned is a real measurement rather than the pay fallback.
+    // v1.52: accepted rows whose gas rate is NOT a measured fillup. A manual or default rate is
+    // a judgement or a placeholder; a rate audit should know how many rows rest on one.
+    if (e.accepted) { var _gs = gasCpmSource(e); if (_gs && _gs !== 'FILLUP') mcNonFillup++; }
+    if (e.accepted && ((e.actualFare !== '' && e.actualFare != null)
+                    || (e.actualTip  !== '' && e.actualTip  != null)
+                    || (e.cashTip    !== '' && e.cashTip    != null))) mcMoney++;
+  });
   var summary = csvRow(['# Date', dateStr, 'Hours Worked', hrs, 'Offers', total, 'Accepted', accepted, 'Accepted Pay', acceptedPay.toFixed(2), 'Fare', fareSum.toFixed(2), 'Tip', tipSum.toFixed(2), 'Cash Tips', cashTips.toFixed(2), 'Earned', earnedSum.toFixed(2), 'Declined', (total - accepted), 'Shift Start', shStart, 'Shift Stop', shStop, 'Break Min', shBreak, 'DD Work Min', shDD, 'Realized Net $/Shift Hr', shReal, 'Shift Blocks', shBlocks,
     // v1.25 APPENDED to the summary line -- cycle coverage for this day.
     // Scored = cycles that produced a Real Net Hr. Dropped = over CYCLE_BREAK_MIN (90), read as
     // a missed break tap. Dropped New = of those, the ones the v1.23 math would have scored,
     // i.e. the coverage cost of the v1.24 cycle fix. Sum this column across a full re-export.
-    'Cycles Scored', R.cyclesScored, 'Cycles Dropped', R.cyclesDropped, 'Cycles Dropped New', R.cyclesDroppedNew]);
+    'Cycles Scored', R.cyclesScored, 'Cycles Dropped', R.cyclesDropped, 'Cycles Dropped New', R.cyclesDroppedNew,
+    // --- v1.35 appends ---
+    // Offers the driver SAW and declined without checking them in the app. Blank (not 0) when
+    // the day predates the counter -- see logCompleteness(). Without this, no export can tell a
+    // thin board from a thin log, and every offers/hr figure is unreadable.
+    // Pending Open is the count of rows still waiting on items at export time.
+    'Unlogged Declines Spark', unSpark, 'Unlogged Declines DD', unDD,
+    'Log Completeness', logCompleteness(shiftSnap),
+    'Pending Open', pendOpen,
+    // --- v1.38 appends ---
+    'Rows Minutes Complete', mcWhole, 'Rows Minutes Derived', mcDerived,
+    'Rows Minutes Partial', mcPartial,
+    // v1.40: see above -- an upper bound on rows flattened by the pre-v1.39 edit path. Upper
+    // bound, not a count: three taps can legitimately land on exact minute boundaries.
+    'Rows Minute Snapped', mcSnapped,
+    // v1.42: rows whose Delivered stamp cannot be adjudicated from the file -- an edited row with
+    // equal stamps. Disclosed rather than silently resolved either way.
+    'Rows Delivered Ambiguous', mcAmbiguous,
+    // v1.43: accepts taken while another run was still in flight. Their lag is not comparable to
+    // an unstacked lag and should be summarised separately, not averaged in.
+    'Rows Stacked Accept', mcStacked,
+    // v1.46: FLOOR, not a ceiling -- a fabricated pair landing in the same millisecond looks
+    // exactly like a real zero-length return and is handled by the v1.41 heuristic instead.
+    'Rows Straddle Candidate', mcStraddle,
+    // v1.48: how many accepted rows have actual money entered. Rows Money Logged == Accepted
+    // means Earned is fully realized; 0 means Earned is entirely the offered-pay fallback; the
+    // difference is the fallback count. Read Earned against this or not at all.
+    'Rows Money Logged', mcMoney,
+    // v1.52: accepted rows not scored on a measured fillup rate (MANUAL, DEFAULT, DERIVED or
+    // STORED). On a pre-v1.52 archive this is every row, because origin was never recorded.
+    'Rows Gas Not Fillup', mcNonFillup,
+    // v1.54: the export now declares its own gas state, so "are receipts actually reaching the
+    // app?" is answered on line 1 instead of reconstructed from row arithmetic.
+    // Fillups Stored 0 with Live Gas Origin MANUAL means every rate is a typed number.
+    'Fillups Stored', fillups.length,
+    'Live Gas Origin', gasOrigin,
+    'Live Gas Cpm', gas.toFixed(6),
+    'Gas Stale Days', (function () { var d = gasStaleDays(); return d == null ? '' : d; })()]);
   // APPEND ONLY -- downstream parsing maps by position. Never reorder or rename.
   var headers = ['Date','Time','Platform','Order Type','Pay','Miles','Est Time','Stops','Items','PPM','Net After Gas','Net Hr Rate','Verdict','FCFS','Accepted','Decline Reason','Accepts At','Travel Miles','Actual Time','Actual Miles','Actual Items','Actual Fare','Actual Tip','Cash Tip','Actual Total','Actual Items A','Actual Items B','Ready At','Wait Min','Adjusted Est','Committed Min','Started At','Delivered At','Back At','Return Kind','Lag Min','Run Min','Return Min','Idle Min','Cycle Min','Real Net Hr',
                  // --- v1.24 appends ---
@@ -3909,7 +5248,86 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
                  //   ZERO-SPAN   degenerate span (never yet observed in real data; the row once
                  //               attributed to it was a misdiagnosis -- see the v1.28 header)
                  //   NO-ACCEPT-TIME  hand-logged row with no accept stamp
-                 'Cycle Note'];
+                 'Cycle Note',
+                 // --- v1.35 appends ---
+                 // Pending State: blank = the offer never pended (checked with items in hand,
+                 //   or under a routing floor, or not a Spark item platform, or declined).
+                 //   OPEN       pended and still waiting at export time -- no items ever came
+                 //   RESOLVED   items were entered and the row was recomputed in place. The
+                 //              Verdict on this row is the POST-item verdict; the pre-item
+                 //              verdict was always ACCEPT, by construction (only an ACCEPT can
+                 //              pend), so a RESOLVED row reading MARGINAL or DECLINE is an
+                 //              item-driven downgrade and can be counted as one.
+                 //   UNRESOLVED closed without items -- either accepted by hand from the log, or
+                 //              superseded when a different offer was checked.
+                 // Pending Min: offer stamp -> resolve, the wall-clock cost of the look. Blank
+                 //   unless RESOLVED. This is time the driver spent inside Spark reading an item
+                 //   screen; PREDICTED_LAG_MIN does not model it.
+                 'Pending State','Pending Min',
+                 // --- v1.38 append ---
+                 // '' not accepted | YES all three measured | DERIVED return leg inferred
+                 // | NO a leg is missing (see which one is blank). Filter on this BEFORE
+                 // summing Lag/Run/Return across rows.
+                 // v1.39: a NO is not always a missed tap. Lag blank with Started At PRESENT
+                 // means startedAt <= acceptedAtMs -- the accept stamp is the problem, the run
+                 // is correct and not inflated, and the row reconciles. Do not read that shape
+                 // as a capture failure. Reconciliation catches at most 1 in 4 of these rows;
+                 // this column is the only reliable filter.
+                 'Minutes Complete',
+                 // --- v1.41 append ---
+                 // TAP        the driver pressed BACK / FED NEXT PICKUP. Measured.
+                 // AUTO-CLOSE the leg ends at the NEXT ACCEPT, written by construction when a new
+                 //            offer was taken before the run was closed. ABSORBS BOARD WAIT --
+                 //            9.58 min average on DD against 3.40 for a tap. Not a return trip.
+                 // DERIVED    DD return inferred from the next pickup's start (v1.30).
+                 // (blank)    no return leg on this row.
+                 // Never pool TAP with AUTO-CLOSE: they measure different quantities.
+                 'Return Source',
+                 // --- v1.42 appends ---
+                 // Edited At / Edit Count: explicit edit provenance. Until v1.40 the only edit
+                 // signal in an export was an accidental one -- saveEdit() wiping Stops on DD --
+                 // and fixing that bug removed it. This replaces it deliberately. An edited row
+                 // has minute-truncated stamps, so any sub-minute reasoning about it is void.
+                 'Edited At','Edit Count',
+                 // --- v1.43 appends ---
+                 // Stacked On: the platforms already IN FLIGHT when this offer was accepted,
+                 //   joined with +. Blank means nothing was live. On such a row LAG ABSORBS THE
+                 //   REMAINING FLIGHT TIME of that other run -- 17.60 min mean against 4.34
+                 //   unstacked -- so a Spark row can be carrying DoorDash cost. Never pool
+                 //   stacked and unstacked lag.
+                 // Distinct from Return Source, which describes how the OTHER run ENDED. A row
+                 //   can carry both: stacked on arrival, auto-closed on exit.
+                 'Stacked On','Stacked Count',
+                 // --- v1.44 append ---
+                 // Stacked Started: of the runs counted in Stacked Count, how many had already
+                 //   STARTED when this offer was accepted. Decides which correction applies:
+                 //   Started == Count -> this lag holds those runs' TAILS (subtract remaining)
+                 //   Started <  Count -> it holds at least one run WHOLE (subtract occupancy)
+                 //   Blank when nothing was stacked.
+                 'Stacked Started',
+                 // --- v1.51 appends ---
+                 // Gas Cpm: the $/mile this row was scored at. Charging is
+                 //   cpm * (2*miles + travelMiles) -- return leg at listed mileage, travel miles
+                 //   one-way on top. Rows on the same date CAN differ: a fillup mid-shift moves
+                 //   the rate, and that is the within-day scatter, not rounding.
+                 // Gas Cpm Source (v1.52 -- reports ORIGIN, not just presence):
+                 //   FILLUP  ppg*gal/mi off a logged receipt. A MEASUREMENT.
+                 //   MANUAL  typed on the slider. An ASSERTION, quantized to 0.001 by the
+                 //           control -- which is why manual rates look suspiciously round.
+                 //   DEFAULT GAS_SHIPPED_DEFAULT, no fillup logged. A PLACEHOLDER.
+                 //   DERIVED inverted from (pay-net)/(2*miles+travelMiles) on a pre-v1.52 row.
+                 //           The VALUE in THIS cell is exact (computed in-app from full
+                 //           precision); the ORIGIN is unrecoverable. Re-deriving it by hand from
+                 //           the rounded Pay/Net/Miles cells is NOT exact -- see Gas Cpm Max Err.
+                 //   STORED  v1.51-only rows: rate recorded, origin not. Should not recur.
+                 //   (blank) nothing chargeable.
+                 // Do not pool FILLUP with MANUAL or DEFAULT when auditing a rate.
+                 // Gas Cpm Max Err (v1.53): 0.005 / (2*miles + travelMiles). The worst-case
+                 //   error if this row's rate is re-derived BY HAND from the rounded export
+                 //   rather than read from Gas Cpm. Small denominators dominate: ~0.0025 at one
+                 //   mile, ~0.00025 at ten. A cluster's apparent spread is driven by its
+                 //   shortest runs, not by a missing term in the charging model.
+                 'Gas Cpm','Gas Cpm Source','Gas Cpm Max Err'];
   var rows = src.map(function(e) {
     var hasM = (e.actualFare !== '' && e.actualFare != null) || (e.actualTip !== '' && e.actualTip != null) || (e.cashTip !== '' && e.cashTip != null);
     var actTotal = hasM ? ((parseFloat(e.actualFare)||0) + (parseFloat(e.actualTip)||0) + (parseFloat(e.cashTip)||0)).toFixed(2) : '';
@@ -3918,7 +5336,10 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
       e.pay.toFixed(2), e.miles.toFixed(1), e.estMin,
       (e.stops === undefined || e.stops === '') ? '' : e.stops,
       (e.items === undefined || e.items === '') ? '' : e.items,
-      e.ppm.toFixed(2), e.net.toFixed(2), e.netHr.toFixed(0),
+      // v1.35: 2dp, was 0dp. Same column, same position -- a 15.3 accept bar cannot be audited
+      // from a file where 15.4 and 15.0 both print as 15. Rows exported before v1.35 are 0dp
+      // and cannot be recovered; treat the precision change as a basis boundary, not a fix.
+      e.ppm.toFixed(2), e.net.toFixed(2), e.netHr.toFixed(2),
       e.verdict, e.fcfs ? 'YES' : 'NO',
       e.accepted ? 'YES' : 'NO',
       e.declineReason || '',
@@ -3942,20 +5363,48 @@ function buildCsvFor(src, dateStr, shiftSnap, hrs) {
       msToClock(e.deliveredAt),
       msToClock(e.backAt),
       e.returnKind || '',
-      e.lagMin    == null ? '' : Math.round(e.lagMin),
-      e.runMin    == null ? '' : Math.round(e.runMin),
-      e.returnMin == null ? '' : Math.round(e.returnMin),
-      e.idleMin   == null ? '' : Math.round(e.idleMin),
-      e.cycleMin  == null ? '' : Math.round(e.cycleMin),
+      // v1.46: 2dp, was whole minutes. Rounding destroyed sub-minute evidence on the way out --
+      // including the straddled-fabrication signature v1.45 wrongly claimed was findable in the
+      // export. Same columns, same order; a parser comparing these cells as strings must switch
+      // to a numeric compare. Pre-v1.46 rows are integer-rounded and unrecoverable.
+      e.lagMin    == null ? '' : e.lagMin.toFixed(2),
+      e.runMin    == null ? '' : e.runMin.toFixed(2),
+      e.returnMin == null ? '' : e.returnMin.toFixed(2),
+      e.idleMin   == null ? '' : e.idleMin.toFixed(2),
+      e.cycleMin  == null ? '' : e.cycleMin.toFixed(2),
       e.realHr    == null ? '' : e.realHr.toFixed(2),
       // --- v1.24 appends ---
       e.closeReason || '',
-      e.cycleBreakMin   == null ? '' : Math.round(e.cycleBreakMin),
-      e.cycleOverlapMin == null ? '' : Math.round(e.cycleOverlapMin),
+      e.cycleBreakMin   == null ? '' : e.cycleBreakMin.toFixed(2),     // v1.46: 2dp
+      e.cycleOverlapMin == null ? '' : e.cycleOverlapMin.toFixed(2),   // v1.46: 2dp
       // --- v1.25 appends ---
-      e.cycleDropMin == null ? '' : Math.round(e.cycleDropMin),
+      e.cycleDropMin == null ? '' : e.cycleDropMin.toFixed(2),         // v1.46: 2dp
       e.cycleDropNew ? 'NEW' : '',
-      e.cycleNote || ''
+      e.cycleNote || '',
+      // --- v1.35 appends ---
+      e.pendingState || '',
+      (e.pendingState === 'RESOLVED' && e.pendedAtMs && e.pendingResolvedAtMs)
+        ? ((e.pendingResolvedAtMs - e.pendedAtMs) / 60000).toFixed(1) : '',
+      // --- v1.38 append ---
+      minutesCompleteFlag(e),
+      // --- v1.41 append ---
+      returnSource(e),
+      // --- v1.42 appends ---
+      e.editedAt ? stampToDateTime(e.editedAt) : '',
+      e.editCount ? e.editCount : '',
+      // --- v1.43 appends ---
+      e.stackedOn || '',
+      e.stackedCount ? e.stackedCount : '',
+      // --- v1.44 append ---
+      e.stackedCount ? (e.stackedStarted || 0) : '',
+      // --- v1.51 appends ---
+      (function () { var c = effectiveGasCpm(e); return c == null ? '' : c.toFixed(6); })(),
+      gasCpmSource(e),
+      // --- v1.53 append ---
+      (function () {
+        var cm = (2 * (e.miles || 0)) + (e.travelMiles || 0);
+        return cm > 0 ? (0.005 / cm).toFixed(6) : '';
+      })()
     ]);
   });
 
@@ -4039,6 +5488,7 @@ function openEditModal(i) {
   document.getElementById('editReady').value      = e.readyAt || '';
   document.getElementById('editStarted').value    = msToClock(e.startedAt);
   document.getElementById('editDelivered').value  = msToClock(e.deliveredAt);
+  resetDeliveredConfirm(e);   // v1.40
   document.getElementById('editBack').value       = msToClock(e.backAt);
   document.getElementById('editReturnKind').value = e.returnKind || '';
   document.getElementById('editModalMeta').textContent = e.date + '  -  ' + e.time;
@@ -4064,6 +5514,42 @@ function closeEditModal() {
   document.getElementById('editModal').classList.remove('open');
   editIndex = -1;
   deleteConfirmPending = false;
+}
+
+// === v1.40: vouching for a fabricated Delivered stamp ======================================
+// v1.39 cleared the inferred mark whenever the Delivered box was non-blank at save. The box is
+// PRE-FILLED from the stamp, so that was true on every save -- clicking through the modal
+// promoted a fabrication to a measurement. Now it takes a deliberate, two-tap assertion, or an
+// actual change to the value.
+var deliveredConfirmArmed = false;
+function armDeliveredConfirm() {
+  var btn = document.getElementById('deliveredConfirmBtn');
+  if (!deliveredConfirmArmed) {
+    deliveredConfirmArmed = true;
+    btn.textContent = 'TAP AGAIN TO CONFIRM FROM MEMORY';
+    btn.style.background = 'var(--amber)';
+    btn.style.color = 'var(--bg)';
+    return;
+  }
+  btn.textContent = 'CONFIRMED -- SAVE TO APPLY';
+  btn.style.background = 'var(--green-dim)';
+  btn.style.borderColor = 'var(--green)';
+  btn.style.color = 'var(--green)';
+  deliveredConfirmArmed = 2;   // 2 = actually confirmed, not merely armed
+}
+function resetDeliveredConfirm(e) {
+  deliveredConfirmArmed = false;
+  var row = document.getElementById('deliveredInferredRow');
+  var btn = document.getElementById('deliveredConfirmBtn');
+  if (!row || !btn) return;
+  // v1.42: also offered on AMBIGUOUS rows -- an edited row with equal stamps, where the file
+  // cannot say whether the stamp was real. Same two-tap vouch, same standard of recall.
+  var prov = e ? deliveredProvenance(e) : 'NA';
+  row.style.display = (prov === 'FABRICATED' || prov === 'AMBIGUOUS') ? 'block' : 'none';
+  btn.textContent = 'I REMEMBER THIS DROP TIME';
+  btn.style.background = 'var(--surface2)';
+  btn.style.borderColor = 'var(--amber)';
+  btn.style.color = 'var(--amber)';
 }
 
 function saveEdit() {
@@ -4106,7 +5592,12 @@ function saveEdit() {
   var travelMi = e.travelMiles || 0;
   var totalMi  = newMiles + travelMi;
   var ppm      = newPay / totalMi;
-  var gasCost  = (newMiles * gas * 2) + (travelMi * gas);
+  // v1.51: THE ROW'S OWN RATE, not today's. Before this, editing any field re-derived net at the
+  // live rate, so correcting a typo in pay could silently rescore the row at a gas price that was
+  // not in effect when the offer was taken. A legacy row's rate is inverted from the row itself.
+  var rowCpm   = effectiveGasCpm(e);
+  if (rowCpm == null) rowCpm = gas;                  // unrecoverable: live rate, same as before
+  var gasCost  = (newMiles * rowCpm * 2) + (travelMi * rowCpm);
   var net      = newPay - gasCost;
   var netHr    = netHrMin > 0 ? (net / (netHrMin / 60)) : 0;
 
@@ -4145,6 +5636,14 @@ function saveEdit() {
   e.orderType  = newPlatform;
   e.estMin     = estMin;
   e.ppm        = ppm;
+  // v1.50 CAVEAT, FIXED IN v1.51: this used to re-derive net at the CURRENT gas rate rather than
+  // the rate live when the row was scored, so editing an old row silently rescored it. It now
+  // uses rowCpm above. The rate is written back so a legacy row stops being re-inverted on every
+  // subsequent edit and its basis is pinned from here on.
+  e.gasCpm     = rowCpm;
+  // v1.52: an edit must not invent provenance. If the row already knew its origin, keep it;
+  // if the rate had to be inverted, it stays DERIVED -- editing does not make it a measurement.
+  if (!e.gasOrigin) e.gasOrigin = 'DERIVED';
   e.net        = net;
   e.netHr      = netHr;
   e.verdict    = vWord;
@@ -4157,20 +5656,46 @@ function saveEdit() {
   // PHASE B fixups -- missed taps are guaranteed, so Delivered / Back / B-N are all editable.
   // Times are entered as clock time and re-anchored to the run's own accept date.
   var anchor = e.acceptedAtMs ? new Date(e.acceptedAtMs) : new Date();
-  e.startedAt   = parseClockToMs(document.getElementById('editStarted').value, anchor);
-  e.deliveredAt = parseClockToMs(document.getElementById('editDelivered').value, anchor);
-  e.backAt      = parseClockToMs(document.getElementById('editBack').value, anchor);
+  // v1.39: PRESERVE SUB-MINUTE PRECISION. The boxes hold clock time to the minute, so a plain
+  // re-parse flattens every stamp on every save -- and an edit to PAY alone was enough to snap
+  // Delivered and Back into the same millisecond and silently blank a measured return leg.
+  // If the box still reads what the stamp already says, keep the stamp.
+  function reStamp(id, oldMs) {
+    var v = document.getElementById(id).value;
+    if (oldMs && msToClock(oldMs) === v) return oldMs;   // untouched: original precision stands
+    return parseClockToMs(v, anchor);
+  }
+  var deliveredBoxBefore = e.deliveredAt ? msToClock(e.deliveredAt) : '';
+  var deliveredBoxNow = document.getElementById('editDelivered').value;
+  e.startedAt   = reStamp('editStarted', e.startedAt);
+  e.deliveredAt = reStamp('editDelivered', e.deliveredAt);
+  e.backAt      = reStamp('editBack', e.backAt);
+  // v1.40 (replacing v1.39's click-through): the mark clears only on a deliberate assertion --
+  // the driver either CHANGED the time, or made the two-tap confirmation. Saving the modal with
+  // the pre-filled value untouched leaves the fabrication marked as a fabrication.
+  var deliveredChanged = (deliveredBoxNow !== '' && deliveredBoxNow !== deliveredBoxBefore);
+  if (e.deliveredAt && (deliveredChanged || deliveredConfirmArmed === 2)) e.deliveredInferred = false;
+  deliveredConfirmArmed = false;
   var rk = document.getElementById('editReturnKind').value;
   e.returnKind  = rk || null;
-  // Stops/items only apply to Shop, Curbside, and Shop+Pharmacy
+  // Stops/items are EDITABLE on Shop, Curbside and Shop+Pharmacy.
+  // v1.40 FIX: the else-branch used to CLEAR both on every other platform, so editing a DD/UE
+  // row for any reason silently wiped a Stops value that analyze() had captured at entry --
+  // analyze() stores stops for EVERY platform, with no such gate. An edit must not destroy a
+  // field it does not manage. Left untouched instead of cleared.
   if (newPlatform === 'Spark Shop' || newPlatform === 'Curbside' || newPlatform === 'Shop+Pharmacy') {
     e.stops = isNaN(newStopsRaw) ? '' : newStopsRaw;
     e.items = isNaN(newItemsRaw) ? '' : newItemsRaw;
   } else {
-    e.stops = '';
-    e.items = '';
+    /* preserved */
   }
   // If verdict changed to a non-accept, and entry was auto-accepted, leave accept toggle as user set it
+
+  // v1.42: every edit leaves a mark. This is what makes "equality on the minute" decidable
+  // instead of a guess -- and it replaces the Stops wipe, which was doing this job by accident
+  // until v1.40 fixed it.
+  e.editedAt = Date.now();
+  e.editCount = (e.editCount || 0) + 1;
 
   saveOfferLog();
   renderAll();
@@ -4242,6 +5767,23 @@ function analyze() {
 
   // Net/hr denominator = committed time. Long-run penalty triggers on RAW est (see getNetHrMinutes).
   var netHrMin   = getNetHrMinutes(estMin, overrun, isDDUE, waitMin, predReturn, predLag);
+
+  // === v1.35: is this CHECK a resolve of the open pending, or a new offer? ===================
+  // Same open row + same face values + an item count that was not there before = resolve.
+  // Everything else is a new offer. The item count itself is deliberately NOT in the signature:
+  // it is the one field that is supposed to change between pend and resolve.
+  var thisSig = faceSig(platform, pay, miles, estMin,
+                        isNaN(stopsForBuffer) ? '' : stopsForBuffer,
+                        readyAtStr, travelMiles, isFCFS);
+  var pendRow = (pendingIdx >= 0 && pendingIdx < offerLog.length) ? offerLog[pendingIdx] : null;
+  if (pendRow && pendRow.pendingState !== 'OPEN') { pendRow = null; pendingIdx = -1; pendingSig = ''; }
+  var resolving = !!(pendRow && pendingSig === thisSig && !isNaN(itemsForBuffer));
+  // A different offer while one is open: the old one never got its items and never will.
+  if (pendRow && !resolving && pendingSig !== thisSig) {
+    pendRow.pendingState = 'UNRESOLVED';
+    pendRow = null; pendingIdx = -1; pendingSig = '';
+    saveOfferLog();
+  }
 
   // Hard decline fires on adjusted est WITHOUT the scheduled wait. Phase D is deliberately
   // advisory: whether a wait is dead depends on what else is on offer (chain an order, run a
@@ -4330,6 +5872,22 @@ function analyze() {
     vReason = itemsForBuffer + ' items -- over the ' + HIGH_ITEM_CAP + '-item cap. $'
             + netHrRate.toFixed(0) + '/hr clears the $' + SPARK_ACCEPT_HR
             + '/hr line, but a shop this size overruns its est. Your call.';
+  }
+
+  // === v1.35 PENDING ========================================================================
+  // Only ever reached from ACCEPT. A DECLINE is already decided -- items cannot rescue it, so
+  // they are never asked for. A MARGINAL is already the driver's call and the cap only
+  // downgrades an ACCEPT, so a look there buys nothing either. Above both routing floors, on a
+  // platform that has an item screen, an unknown item count is the one thing still in play.
+  var pendNow = !isDDUE && hasItemCount(platform) && vWord === 'ACCEPT'
+             && isNaN(itemsForBuffer)
+             && estMin >= PENDING_EST_MIN && pay >= PENDING_PAY_MIN;
+  if (pendNow) {
+    vClass = 'pending'; vWord = 'PENDING';
+    vReason = 'Clears the line at $' + netHrRate.toFixed(0) + '/hr -- but ' + estMin
+            + 'min at $' + pay.toFixed(2) + ' is big enough that item count can still flip it. '
+            + 'Open the offer in Spark, read the items, come back and enter them, tap CHECK. '
+            + 'Nothing here is cleared and nothing is accepted yet.';
   }
 
   document.getElementById('vBanner').className = 'verdict-banner ' + vClass;
@@ -4454,6 +6012,23 @@ function analyze() {
   // backAt = this accept time. Editable after the fact. Only meaningful once Delivered was
   // stamped; without that we have no return leg to close and we leave it blank.
   var wasAccepted = (vClass === 'accept' || vClass === 'filler');
+  // v1.43: what was ALREADY IN FLIGHT when this offer was taken. Read before anything is closed
+  // or pushed, from allInflightIdxs() -- the same set the capture bar draws, so "in flight" has
+  // one definition in this file and not two. A run still in flight is NOT auto-closed; it keeps
+  // running, which is precisely why this row's lag will absorb the rest of it.
+  var stackedPlatforms = [], stackedCount = 0, stackedStarted = 0;
+  if (wasAccepted) {
+    var inFlight = allInflightIdxs();
+    for (var sfi = 0; sfi < inFlight.length; sfi++) {
+      var sfe = offerLog[inFlight[sfi]];
+      if (sfe.deliveredAt) continue;              // delivered-but-unclosed is the AUTO-CLOSE case
+      stackedCount++;
+      // v1.44: had it actually STARTED? If yes this lag will contain that run's tail; if no it
+      // will contain the whole thing. Different corrections, so the two are counted apart.
+      if (sfe.startedAt) stackedStarted++;
+      if (stackedPlatforms.indexOf(sfe.platform) < 0) stackedPlatforms.push(sfe.platform);
+    }
+  }
   if (wasAccepted) {
     // A delivered-but-unclosed run (Spark or, as of v1.23, DD) fed this pickup -- close it 'N'.
     // A run still mid-delivery is NOT closed: both are legitimately in the air at once.
@@ -4461,10 +6036,13 @@ function analyze() {
     if (pIdx >= 0) {
       offerLog[pIdx].backAt = now.getTime();
       offerLog[pIdx].returnKind = 'N';
+      // v1.40: NO TAP HAPPENED. backAt here is this row's accept stamp, so the leg it creates is
+      // inferred, not observed. Marked so the export can say so -- see minutesCompleteFlag().
+      offerLog[pIdx].backInferred = true;
     }
   }
 
-  offerLog.push({
+  var newRow = {
     date: now.toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}),
     time: now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
     platform: platform,
@@ -4480,6 +6058,9 @@ function analyze() {
     verdict: vWord,
     fcfs: isFCFS,
     accepted: vClass === 'accept' || vClass === 'filler',
+    // v1.37: set the moment a row is ever accepted, never cleared. Distinguishes a run that was
+    // taken and then canceled from an offer that was simply passed on.
+    everAccepted: vClass === 'accept' || vClass === 'filler',
     acceptAt: showThresh ? acceptAt : null,
     acceptedAtMs: now.getTime(),
     travelMiles: travelMiles,
@@ -4504,29 +6085,102 @@ function analyze() {
     actualItemsB: '',
     actualFare: '',
     actualTip: '',
-    cashTip: ''
-  });
+    cashTip: '',
+    // --- v1.35 ---
+    // '' = never pended. OPEN = waiting on items. RESOLVED = items arrived and this row was
+    // recomputed. UNRESOLVED = closed without items (accepted by hand, or superseded).
+    // v1.42: schema marker. Lets a row created under v1.42+ that has never been edited be told
+    // apart from a legacy row that merely lacks the field -- absent is not the same as zero.
+    rowVer: 151,
+    // v1.51: the gas rate this row was actually scored at. Stored so an edit, or a reader, never
+    // has to assume today's rate applied when the offer was taken.
+    gasCpm: gas,
+    gasOrigin: gasOrigin,   // v1.52: FILLUP | MANUAL | DEFAULT -- see gasCpmSource()
+    // v1.43: this accept happened DURING another run. Its lag contains that run's remaining
+    // flight time, so it does not belong in the same population as an unstacked lag.
+    stackedOn: stackedPlatforms.join('+'),
+    stackedCount: stackedCount,
+    stackedStarted: stackedStarted,   // v1.44
+    editedAt: null,
+    editCount: 0,
+    pendingState: pendNow ? 'OPEN' : '',
+    pendedAtMs: pendNow ? now.getTime() : null,
+    pendingResolvedAtMs: null
+  };
+
+  // v1.35: a resolve UPDATES THE ROW IT PENDED AS. One offer, one row -- that is the whole
+  // point of the state. Every derived field is rewritten from the recompute above, so a
+  // resolved row is indistinguishable from a row checked with items in hand the first time,
+  // except for the three pending columns that record that a look happened.
+  if (resolving) {
+    var pe = pendRow;
+    pe.estMin       = estMin;
+    pe.stops        = isNaN(stopsVal) ? '' : stopsVal;
+    pe.items        = isNaN(itemsVal) ? '' : itemsVal;
+    pe.ppm          = ppm;
+    pe.net          = net;
+    pe.netHr        = netHrRate;
+    pe.verdict      = vWord;
+    pe.accepted     = wasAccepted;
+    if (wasAccepted) pe.everAccepted = true;   // v1.37
+    pe.acceptAt     = showThresh ? acceptAt : null;
+    pe.readyAt      = readyAtStr || '';
+    pe.waitMin      = waitMin;
+    pe.adjustedEst  = adjustedEst;
+    pe.committedMin = committedMin;
+    pe.pendingState = 'RESOLVED';
+    pe.pendingResolvedAtMs = now.getTime();
+    pendingIdx = -1; pendingSig = '';
+  } else {
+    offerLog.push(newRow);
+    if (pendNow) { pendingIdx = offerLog.length - 1; pendingSig = thisSig; }
+  }
   saveOfferLog();
   renderShiftBar();
   renderCaptureBar();
   updateLogBadge();
+  applyPendingUI();
 
-  document.getElementById('inPay').value = '';
-  document.getElementById('inMiles').value = '';
-  document.getElementById('inTime').value = '';
-  document.getElementById('inTime').style.color = '';
-  document.getElementById('inStops').value = '';
-  document.getElementById('inItems').value = '';
-  document.getElementById('inReady').value = '';
-  updateReadyNote();
+  // v1.35: a PENDING holds the board. Clearing the fields here would mean re-entering the whole
+  // offer from memory after the trip into Spark, which is the error the state exists to avoid.
+  // Platform, FCFS and the store toggle are held for the same reason -- they are face values,
+  // and changing any of them makes it a different offer by faceSig().
+  if (!pendNow) {
+    document.getElementById('inPay').value = '';
+    document.getElementById('inMiles').value = '';
+    document.getElementById('inTime').value = '';
+    document.getElementById('inTime').style.color = '';
+    document.getElementById('inStops').value = '';
+    document.getElementById('inItems').value = '';
+    document.getElementById('inReady').value = '';
+    updateReadyNote();
 
-  resetFCFS();
+    resetFCFS();
 
-  resetStore();
+    resetStore();
 
-  // #1: after a DD/UE check, snap the platform back to Spark Shop for the next offer.
-  // keepResult=true so the verdict we just rendered stays on screen.
-  if (isDDUE) selectPlatform('Spark Shop', true);
+    // #1: after a DD/UE check, snap the platform back to Spark Shop for the next offer.
+    // keepResult=true so the verdict we just rendered stays on screen.
+    if (isDDUE) selectPlatform('Spark Shop', true);
+  }
+}
+
+// v1.35: the item box wears the pending state. One outline, on the one field the app is waiting
+// for -- the verdict card says what to do, this says where.
+function applyPendingUI() {
+  var blk = document.getElementById('itemsBlock');
+  if (!blk) return;
+  var open = (pendingIdx >= 0 && pendingIdx < offerLog.length
+              && offerLog[pendingIdx] && offerLog[pendingIdx].pendingState === 'OPEN');
+  if (open) blk.classList.add('items-wait'); else blk.classList.remove('items-wait');
+}
+
+// v1.35: typing an item count must not wipe the verdict card while a pending is open -- that
+// card is the instruction for what to do next. With no pending open, behavior is unchanged.
+function itemsInput() {
+  if (pendingIdx >= 0 && pendingIdx < offerLog.length
+      && offerLog[pendingIdx] && offerLog[pendingIdx].pendingState === 'OPEN') return;
+  clearResult();
 }
 
 function resetStore() {
@@ -4611,7 +6265,7 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Enter') analyz
         saveHistory();
       }
       // A shift never survives the rollover -- never compute a cycle across the rotation.
-      shift = { date: todayStr, blocks: [] };
+      shift = { date: todayStr, blocks: [], unlogged: { spark: 0, dd: 0 } };   // v1.35
       localStorage.setItem('rch_shift', JSON.stringify(shift));
       var oldPace = JSON.parse(localStorage.getItem('rch_pace') || '{}');
       var newPace = { t: oldPace.t || 125, h: 7, e: 0 };
@@ -4632,10 +6286,14 @@ updateLogBadge();
 
 // v1.17 init: a stale shift from a previous day must never score today.
 if (shift.date && shift.date !== todayKey()) {
-  shift = { date: todayKey(), blocks: [] };
+  shift = { date: todayKey(), blocks: [], unlogged: { spark: 0, dd: 0 } };   // v1.35
   saveShift();
 }
 applyReadyVisibility();
+// v1.35: stamp the build into the header from the one constant that names it.
+document.getElementById('appVer').textContent = APP_VERSION;
+// v1.36: fuel date defaults to today -- the normal case costs no taps.
+document.getElementById('fuDate').value = todayIso();
 document.getElementById('histDays').textContent = HISTORY_DAYS;
 document.getElementById('histCount').textContent = logHistory.length + (offerLog.length ? 1 : 0);
 renderShiftBar();
